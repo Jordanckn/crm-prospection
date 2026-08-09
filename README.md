@@ -55,6 +55,11 @@ Après déploiement de la migration `20260730090000_add_multi_user_admin.sql`, l
 `contact@webfityou.com` devient automatiquement administrateur. Les nouveaux comptes sont
 ensuite créés depuis le menu **Administration** du CRM.
 
+Une fois cette migration appliquée sur le projet Supabase distant, définir
+`VITE_MULTI_USER_ENABLED=true` dans l'environnement du front. Conserver la valeur `false`
+sur une base historique non migrée afin que la connexion reste compatible et n'interroge
+pas la table `profiles` avant sa création.
+
 La création sécurisée des comptes nécessite le déploiement de la fonction :
 
 ```bash

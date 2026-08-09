@@ -16,6 +16,27 @@ import Administration from './pages/Administration';
 import { supabase } from './lib/supabase';
 import type { Contact, Profile } from './types/database';
 
+type SessionUser = {
+  id: string;
+  email?: string;
+  user_metadata?: { full_name?: string };
+};
+
+const legacyProfile = (user: SessionUser): Profile => {
+  const now = new Date().toISOString();
+  const email = user.email || '';
+  return {
+    id: user.id,
+    email,
+    full_name: user.user_metadata?.full_name || email.split('@')[0] || 'Utilisateur',
+    role: email.toLowerCase() === 'contact@webfityou.com' ? 'admin' : 'commercial',
+    active: true,
+    manager_id: null,
+    created_at: now,
+    updated_at: now,
+  };
+};
+
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -26,13 +47,35 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
-    const applySession = async (userId?: string) => {
-      if (!userId) {
+    const applySession = async (user?: SessionUser) => {
+      if (!user) {
         if (mounted) { setProfile(null); setIsAuthenticated(false); setIsLoading(false); }
         return;
       }
-      const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+
+      // Tant que la migration distante n'est pas déployée, ne pas interroger une
+      // table `profiles` inexistante (ce qui produirait un 404 dans le navigateur).
+      if (import.meta.env.VITE_MULTI_USER_ENABLED !== 'true') {
+        if (mounted) {
+          setProfile(legacyProfile(user));
+          setIsAuthenticated(true);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
       if (!mounted) return;
+
+      // Compatibilité avec la base historique : l'authentification reste utilisable
+      // avant le déploiement de la migration multi-utilisateur qui crée `profiles`.
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        setProfile(legacyProfile(user));
+        setIsAuthenticated(true);
+        setIsLoading(false);
+        return;
+      }
+
       if (!data?.active) {
         await supabase.auth.signOut();
         setProfile(null);
@@ -44,9 +87,9 @@ function App() {
       setIsLoading(false);
     };
 
-    supabase.auth.getSession().then(({ data }) => applySession(data.session?.user.id));
+    supabase.auth.getSession().then(({ data }) => applySession(data.session?.user));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      void applySession(session?.user.id);
+      void applySession(session?.user);
     });
     return () => { mounted = false; subscription.unsubscribe(); };
   }, []);

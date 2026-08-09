@@ -116,7 +116,7 @@ export default function Login({ onLogin }: LoginProps) {
 
           <div className="mt-6 pt-6 border-t border-slate-200">
             <p className="text-xs text-slate-500 text-center">
-              WebFitYou CRM © 2024
+              WebFitYou CRM © 2026
             </p>
           </div>
         </div>
