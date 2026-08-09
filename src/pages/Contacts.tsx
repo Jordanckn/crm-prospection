@@ -42,8 +42,6 @@ const SECTEUR_GROUPS: { label: string; secteurs: string[] }[] = [
   },
 ];
 
-const SECTEURS = SECTEUR_GROUPS.flatMap(g => g.secteurs);
-
 function findSecteurGroupe(secteur: string): string {
   return SECTEUR_GROUPS.find(g => g.secteurs.includes(secteur))?.label || SECTEUR_GROUPS[0].label;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Target, Save, Brain, Check, ChevronDown } from 'lucide-react';
+import { Target, Save, Brain, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Objectif } from '../types/database';
 
@@ -34,11 +34,14 @@ export default function Parametres() {
 
   const loadObjectif = async () => {
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
       const aujourdhui = new Date().toISOString().split('T')[0];
       const { data, error } = await supabase
         .from('objectifs')
         .select('*')
         .eq('date', aujourdhui)
+        .eq('user_id', user.id)
         .maybeSingle();
       if (error && error.code !== 'PGRST116') throw error;
       if (data) {
@@ -72,10 +75,12 @@ export default function Parametres() {
     setSaving(true);
     try {
       const aujourdhui = new Date().toISOString().split('T')[0];
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
       if (objectif) {
         await supabase.from('objectifs').update(formData).eq('id', objectif.id);
       } else {
-        await supabase.from('objectifs').insert([{ ...formData, date: aujourdhui }]);
+        await supabase.from('objectifs').insert([{ ...formData, date: aujourdhui, user_id: user.id }]);
       }
       await loadObjectif();
     } catch (error) { console.error('Erreur:', error); }

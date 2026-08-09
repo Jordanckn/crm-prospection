@@ -18,14 +18,6 @@ type Session = {
   created_at: string;
 };
 
-type RecapJour = {
-  id?: string;
-  user_id: string;
-  jour: string;
-  minutes_travail: number;
-  minutes_prospection: number;
-};
-
 function fmtDuration(minutes: number): string {
   if (minutes < 60) return `${minutes} min`;
   const h = Math.floor(minutes / 60);

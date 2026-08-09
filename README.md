@@ -43,3 +43,33 @@ Les migrations SQL versionnées se trouvent dans `supabase/migrations/`. Toutes 
 | `process-sequences` | Traitement périodique des séquences email automatisées (relances) |
 
 Déploiement : `supabase functions deploy <nom> --project-ref <ref>`.
+
+## Administration et équipe
+
+Le CRM prend en charge deux rôles :
+
+- `admin` : voit l'ensemble de l'activité, crée les comptes, affecte les prospects et consulte les rapports individuels ;
+- `commercial` : ne voit que les prospects, tâches, relances et listes d'appels qui lui sont attribués.
+
+Après déploiement de la migration `20260730090000_add_multi_user_admin.sql`, le compte
+`contact@webfityou.com` devient automatiquement administrateur. Les nouveaux comptes sont
+ensuite créés depuis le menu **Administration** du CRM.
+
+La création sécurisée des comptes nécessite le déploiement de la fonction :
+
+```bash
+supabase functions deploy admin-users --project-ref <ref>
+```
+
+`SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` sont fournis automatiquement à la fonction par
+Supabase. La clé `service_role` ne doit jamais être ajoutée aux variables Vite ou au navigateur.
+
+## API et agent OpenClaw
+
+Le CRM inclut une API métier sécurisée, des clés techniques révocables, un journal
+d'audit, une protection anti-doublons et un serveur MCP dans
+`integrations/openclaw-mcp`. Les accès se gèrent dans **Administration > Intégrations
+& agents**.
+
+Voir [`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md) pour le déploiement,
+la liste des routes et la connexion à OpenClaw.

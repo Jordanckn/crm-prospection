@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Plus, Check, X, Calendar, User, CreditCard as Edit, Trash2,
-  Bell, RefreshCw, ChevronDown, ChevronUp, Zap, Clock,
+  Bell, ChevronDown, ChevronUp, Zap,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Tache, Contact } from '../types/database';

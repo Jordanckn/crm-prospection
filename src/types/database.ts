@@ -43,6 +43,8 @@ export type Contact = {
   derniere_interaction: string | null;
   created_at: string;
   updated_at: string;
+  assigned_to: string;
+  created_by: string | null;
 };
 
 export type Interaction = {
@@ -54,6 +56,7 @@ export type Interaction = {
   resultat: 'Pas de réponse' | 'Répondu' | 'Intéressé' | 'Non intéressé' | 'Relance' | '';
   notes: string;
   created_at: string;
+  user_id: string;
 };
 
 export type Tache = {
@@ -65,6 +68,8 @@ export type Tache = {
   statut: 'En attente' | 'Terminé';
   created_at: string;
   updated_at: string;
+  assigned_to: string;
+  created_by: string | null;
 };
 
 export type Objectif = {
@@ -72,6 +77,20 @@ export type Objectif = {
   date: string;
   appels_objectif: number;
   messages_objectif: number;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+};
+
+export type UserRole = 'admin' | 'commercial';
+
+export type Profile = {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+  active: boolean;
+  manager_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -143,23 +162,30 @@ export type Database = {
     Tables: {
       contacts: {
         Row: Contact;
-        Insert: Omit<Contact, 'id' | 'created_at' | 'updated_at'>;
+        Insert: Omit<Contact, 'id' | 'created_at' | 'updated_at' | 'assigned_to' | 'created_by'>
+          & Partial<Pick<Contact, 'assigned_to' | 'created_by'>>;
         Update: Partial<Omit<Contact, 'id' | 'created_at' | 'updated_at'>>;
       };
       interactions: {
         Row: Interaction;
-        Insert: Omit<Interaction, 'id' | 'created_at'>;
+        Insert: Omit<Interaction, 'id' | 'created_at' | 'user_id'> & Partial<Pick<Interaction, 'user_id'>>;
         Update: Partial<Omit<Interaction, 'id' | 'created_at'>>;
       };
       taches: {
         Row: Tache;
-        Insert: Omit<Tache, 'id' | 'created_at' | 'updated_at'>;
+        Insert: Omit<Tache, 'id' | 'created_at' | 'updated_at' | 'assigned_to' | 'created_by'>
+          & Partial<Pick<Tache, 'assigned_to' | 'created_by'>>;
         Update: Partial<Omit<Tache, 'id' | 'created_at' | 'updated_at'>>;
       };
       objectifs: {
         Row: Objectif;
-        Insert: Omit<Objectif, 'id' | 'created_at' | 'updated_at'>;
+        Insert: Omit<Objectif, 'id' | 'created_at' | 'updated_at' | 'user_id'> & Partial<Pick<Objectif, 'user_id'>>;
         Update: Partial<Omit<Objectif, 'id' | 'created_at' | 'updated_at'>>;
+      };
+      profiles: {
+        Row: Profile;
+        Insert: Omit<Profile, 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<Profile, 'id' | 'created_at' | 'updated_at'>>;
       };
       templates: {
         Row: Template;

@@ -178,8 +178,7 @@ function ChartContent({ data, activeChannels, width, height, padL = 32, padR = 1
           width={stepX}
           height={chartH}
           fill="transparent"
-          onMouseEnter={(e) => {
-            const rect = (e.target as SVGRectElement).closest('svg')!.getBoundingClientRect();
+          onMouseEnter={() => {
             setTooltip({ x: getX(i), y: padT, label: p.label, counts: p.counts });
           }}
         />

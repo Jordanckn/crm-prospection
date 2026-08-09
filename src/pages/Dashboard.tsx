@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Phone, Mail, MessageCircle, TrendingUp, Target, Calendar, CheckSquare, ChevronDown, Globe } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Interaction, Objectif, Contact, Tache } from '../types/database';
+import type { Contact, Tache } from '../types/database';
 
 type Stats = {
   appelsAujourdhui: number;
@@ -92,11 +92,14 @@ export default function Dashboard() {
         setTachesEnAttente(taches);
       }
 
-      const { data: objectif } = await supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      const objectifQuery = supabase
         .from('objectifs')
         .select('*')
-        .eq('date', aujourdhui.toISOString().split('T')[0])
-        .maybeSingle();
+        .eq('date', aujourdhui.toISOString().split('T')[0]);
+      const { data: objectif } = user
+        ? await objectifQuery.eq('user_id', user.id).maybeSingle()
+        : { data: null };
 
       if (interactions) {
         const appels = interactions.filter(i => i.type === 'Appel').length;
@@ -157,10 +160,6 @@ export default function Dashboard() {
   const getPaysFlag = (pays: string) => PAYS_FLAGS[pays] || '🌍';
 
   const paysOptions = Object.keys(contactsByPays).sort();
-  const selectedLabel = filterPays
-    ? `${getPaysFlag(filterPays)} ${filterPays}`
-    : 'Tous les pays';
-
   return (
     <div className="space-y-8">
       <div>

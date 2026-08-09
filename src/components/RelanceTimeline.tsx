@@ -1,4 +1,4 @@
-import { Check, Clock, X, ChevronRight } from 'lucide-react';
+import { Check, Clock, X } from 'lucide-react';
 
 export type RelanceEtape = {
   etape: number;

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   BarChart2, Phone, Mail, MessageCircle, TrendingUp, Users, CheckSquare,
-  Download, Calendar, ChevronDown, Target, Clock, Award, Activity,
+  Download, Target, Clock, Award, Activity,
   Facebook as FacebookIcon, Instagram as InstagramIcon
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -318,7 +318,6 @@ export default function Rapport() {
                 const totalH = ((d.appels + d.messages) / maxBar) * 100;
                 const appelsH = (d.appels / maxBar) * 100;
                 const msgH = (d.messages / maxBar) * 100;
-                const intH = (d.interesses / maxBar) * 100;
                 return (
                   <div key={i} className="flex-1 min-w-[28px] flex flex-col items-center gap-1 group">
                     <div className="w-full flex flex-col justify-end gap-0.5" style={{ height: 160 }}>

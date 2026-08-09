@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { Plus, X, Trash2, Play, Pause, Mail, Clock, Users, Check, ChevronRight, CreditCard as EditIcon, Search, Filter, MapPin, Briefcase, Brain } from 'lucide-react';
+import { Plus, X, Trash2, Play, Pause, Mail, Clock, Users, Check, ChevronRight, CreditCard as EditIcon, Search, MapPin, Briefcase, Brain } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Template, Contact } from '../types/database';
 
@@ -283,7 +283,7 @@ export default function EmailSequences() {
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-sm text-slate-900 truncate">{seq.titre}</h3>
                         {!seq.actif && <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded-full font-bold">PAUSE</span>}
-                        {seq.rewrite_ia && <Brain className="w-3 h-3 text-violet-500" title="Reecriture IA active" />}
+                        {seq.rewrite_ia && <span title="Reecriture IA active"><Brain className="w-3 h-3 text-violet-500" /></span>}
                       </div>
                       {seq.description && <p className="text-xs text-slate-500 mt-0.5 truncate">{seq.description}</p>}
                       <div className="flex items-center gap-3 mt-2">

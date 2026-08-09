@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  X, Phone, Mail, Building2, MapPin, Globe, Hash, Tag,
-  Instagram, Facebook, Linkedin, Twitter, Smartphone, Monitor,
-  Clock, FileText, ExternalLink, Eye, Download, ChevronRight,
-  RefreshCw, AlertTriangle,
+  X, Phone, Mail, MapPin, Globe, Hash, Smartphone, Monitor,
+  FileText, Eye, Download, ChevronRight,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Interaction, ContactDocument } from '../types/database';
@@ -23,11 +21,6 @@ const TYPE_COLORS: Record<string, string> = {
   'Facebook': 'bg-blue-50 text-blue-800 border-blue-300',
   'Instagram': 'bg-pink-50 text-pink-700 border-pink-200',
 };
-
-function fmtDate(d: string | null) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 function fmtSize(bytes: number) {
   if (bytes < 1024) return `${bytes} o`;

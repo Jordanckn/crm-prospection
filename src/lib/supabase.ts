@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Database } from '../types/database';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -8,4 +7,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Variables Supabase manquantes');
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+// Le schéma évolue via les migrations Supabase. Les types métier restent définis
+// dans src/types/database.ts, tandis que le client accepte aussi les tables ajoutées
+// par les nouvelles migrations sans les réduire à `never`.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);

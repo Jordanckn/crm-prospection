@@ -12,8 +12,9 @@ import Parametres from './pages/Parametres';
 import Rapport from './pages/Rapport';
 import Pointage from './pages/Pointage';
 import ProgrammationAppels from './pages/ProgrammationAppels';
+import Administration from './pages/Administration';
 import { supabase } from './lib/supabase';
-import type { Contact } from './types/database';
+import type { Contact, Profile } from './types/database';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -21,19 +22,33 @@ function App() {
   const [editContactTarget, setEditContactTarget] = useState<Contact | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
 
   useEffect(() => {
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      setIsAuthenticated(!!session);
+    let mounted = true;
+    const applySession = async (userId?: string) => {
+      if (!userId) {
+        if (mounted) { setProfile(null); setIsAuthenticated(false); setIsLoading(false); }
+        return;
+      }
+      const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+      if (!mounted) return;
+      if (!data?.active) {
+        await supabase.auth.signOut();
+        setProfile(null);
+        setIsAuthenticated(false);
+      } else {
+        setProfile(data);
+        setIsAuthenticated(true);
+      }
       setIsLoading(false);
+    };
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        setIsAuthenticated(!!session);
-      });
-
-      return () => subscription.unsubscribe();
-    })();
+    supabase.auth.getSession().then(({ data }) => applySession(data.session?.user.id));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session?.user.id);
+    });
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
   const navigateToContact = (id: string) => {
@@ -88,6 +103,8 @@ function App() {
         return <Pointage />;
       case 'programmation-appels':
         return <ProgrammationAppels onOpenContact={navigateToContact} />;
+      case 'administration':
+        return profile?.role === 'admin' ? <Administration /> : <Dashboard />;
       default:
         return <Dashboard />;
     }
@@ -106,7 +123,7 @@ function App() {
   }
 
   return (
-    <Layout currentPage={currentPage} onNavigate={handleNavigate}>
+    <Layout currentPage={currentPage} onNavigate={handleNavigate} profile={profile}>
       {renderPage()}
     </Layout>
   );

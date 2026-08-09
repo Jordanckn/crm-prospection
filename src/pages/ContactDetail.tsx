@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowLeft, Phone, Mail, Building2, MapPin, Globe, Hash, Tag, Instagram, Facebook, Linkedin, Twitter, Smartphone, Monitor, Clock, Plus, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, RefreshCw, X, ChevronDown, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Interaction, Tache, ContactDocument } from '../types/database';
 import QuickInteractionModal from '../components/QuickInteractionModal';
@@ -46,18 +46,6 @@ function fmtSize(bytes: number) {
   if (bytes < 1024) return `${bytes} o`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} Ko`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
-}
-
-function PageSpeedBadge({ score }: { score: number }) {
-  const color = score >= 90 ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-    : score >= 50 ? 'bg-amber-100 text-amber-700 border-amber-200'
-    : 'bg-red-100 text-red-700 border-red-200';
-  const label = score >= 90 ? 'Rapide' : score >= 50 ? 'Moyen' : 'Lent';
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-xs font-bold ${color}`}>
-      {score} <span className="font-normal opacity-70">{label}</span>
-    </span>
-  );
 }
 
 type Props = { contactId: string; onBack: () => void; onEdit: (c: Contact) => void };
@@ -231,11 +219,6 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
   }
 
   const initials = `${contact.prenom?.[0] || ''}${contact.nom?.[0] || ''}`.toUpperCase();
-  const interactionsParType = interactions.reduce((acc, i) => {
-    acc[i.type] = (acc[i.type] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
   const tachesEnAttente = taches.filter(t => t.statut === 'En attente');
 
   return (

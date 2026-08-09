@@ -117,7 +117,6 @@ export default function CsvImport({ onClose, onImported }: Props) {
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [mapping, setMapping] = useState<Mapping>({});
   const [result, setResult] = useState<ImportResult>({ success: 0, errors: [] });
-  const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((file: File) => {
@@ -142,7 +141,6 @@ export default function CsvImport({ onClose, onImported }: Props) {
   };
 
   const doImport = async () => {
-    setImporting(true);
     setStep('importing');
     const errors: { row: number; msg: string }[] = [];
     let success = 0;
@@ -183,7 +181,6 @@ export default function CsvImport({ onClose, onImported }: Props) {
     }
 
     setResult({ success, errors });
-    setImporting(false);
     setStep('done');
     if (success > 0) onImported();
   };

@@ -1,12 +1,14 @@
-import { LayoutDashboard, Users, MessageSquare, CheckSquare, Settings, FileText, Phone, LogOut, Calendar, BarChart2, Clock, PhoneCall } from 'lucide-react';
+import { LayoutDashboard, Users, MessageSquare, CheckSquare, Settings, FileText, Phone, LogOut, Calendar, BarChart2, Clock, PhoneCall, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import ScriptModal from './ScriptModal';
 import { supabase } from '../lib/supabase';
+import type { Profile } from '../types/database';
+import type { LucideIcon } from 'lucide-react';
 
 type MenuItem = {
   id: string;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: LucideIcon;
   group?: string;
 };
 
@@ -32,9 +34,10 @@ const groups = [
 type SidebarProps = {
   currentPage: string;
   onNavigate: (page: string) => void;
+  profile: Profile | null;
 };
 
-export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, profile }: SidebarProps) {
   const [showScriptModal, setShowScriptModal] = useState(false);
 
   const handleLogout = async () => {
@@ -61,6 +64,22 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+          {profile?.role === 'admin' && (
+            <div>
+              <p className="px-3 mb-1.5 text-[10px] font-bold text-violet-400 uppercase tracking-widest">Management</p>
+              <button
+                onClick={() => onNavigate('administration')}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm font-semibold ${
+                  currentPage === 'administration'
+                    ? 'bg-violet-600 text-white shadow-md shadow-violet-900/50'
+                    : 'text-violet-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <ShieldCheck style={{ width: 18, height: 18 }} />
+                Administration
+              </button>
+            </div>
+          )}
           {groups.map(group => {
             const items = menuItems.filter(m => m.group === group.key);
             return (

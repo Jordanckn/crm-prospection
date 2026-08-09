@@ -153,10 +153,11 @@ Deno.serve(async (req: Request) => {
 
         // AI rewrite if enabled
         if (shouldRewrite) {
-          // Get user's OpenRouter key from first user's settings (single-user CRM)
+          // Use the settings of the commercial responsible for this contact.
           const { data: settings } = await supabase
             .from("app_settings")
             .select("cle, valeur")
+            .eq("user_id", contact.assigned_to)
             .in("cle", ["openrouter_api_key", "ai_model"]);
 
           let openrouterKey = "";
@@ -202,6 +203,7 @@ Deno.serve(async (req: Request) => {
         // Log as interaction
         await supabase.from("interactions").insert([{
           contact_id: contact.id,
+          user_id: contact.assigned_to,
           type: "Email",
           date_heure: new Date().toISOString(),
           duree: 0,
