@@ -8,6 +8,7 @@ import type { Contact, Profile, Tache } from '../types/database';
 
 type Period = 'day' | 'week' | 'month';
 type AdminTab = 'equipe' | 'affectations' | 'pilotage' | 'integrations';
+const multiUserEnabled = import.meta.env.VITE_MULTI_USER_ENABLED === 'true';
 
 type ApiClient = {
   id: string;
@@ -74,6 +75,12 @@ export default function Administration() {
 
   const loadBaseData = useCallback(async () => {
     setLoading(true);
+    if (!multiUserEnabled) {
+      setProfiles([]);
+      setContacts([]);
+      setLoading(false);
+      return;
+    }
     const [profilesRes, contactsRes] = await Promise.all([
       supabase.from('profiles').select('*').order('full_name'),
       supabase.from('contacts').select('*').order('nom'),
@@ -135,6 +142,7 @@ export default function Administration() {
   }, []);
 
   const loadIntegrations = useCallback(async () => {
+    if (!multiUserEnabled) return;
     setIntegrationLoading(true);
     try {
       const [clients, logs] = await Promise.all([
@@ -198,6 +206,10 @@ export default function Administration() {
 
   const createUser = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!multiUserEnabled) {
+      setMessage("Création indisponible : la migration multi-utilisateur et la fonction admin-users doivent d'abord être déployées sur Supabase.");
+      return;
+    }
     setSaving(true);
     setMessage('');
     const { error } = await supabase.functions.invoke('admin-users', { body: newUser });
@@ -292,6 +304,13 @@ export default function Administration() {
         <p className="mt-1 text-sm text-slate-500">Créez les accès, distribuez les prospects et suivez l'activité individuelle.</p>
       </div>
 
+      {!multiUserEnabled && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">Administration multi-utilisateur en attente de déploiement</p>
+          <p className="mt-1">La connexion au CRM fonctionne, mais la création d'utilisateurs, les affectations, les rapports individuels et les intégrations restent désactivés jusqu'au déploiement Supabase.</p>
+        </div>
+      )}
+
       {message && <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{message}</div>}
 
       <div className="flex gap-2 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
@@ -301,8 +320,8 @@ export default function Administration() {
           ['pilotage', 'Rapports individuels', BarChart2],
           ['integrations', 'Intégrations & agents', Plug],
         ] as const).map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setTab(id)}
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold ${tab === id ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+          <button key={id} onClick={() => setTab(id)} disabled={!multiUserEnabled && id !== 'equipe'}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${tab === id ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
             <Icon className="h-4 w-4" />{label}
           </button>
         ))}
@@ -325,8 +344,8 @@ export default function Administration() {
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
               <option value="commercial">Commercial</option><option value="admin">Administrateur</option>
             </select>
-            <button disabled={saving} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
-              <Plus className="h-4 w-4" />Créer l'utilisateur
+            <button disabled={saving || !multiUserEnabled} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+              <Plus className="h-4 w-4" />{multiUserEnabled ? "Créer l'utilisateur" : 'Déploiement Supabase requis'}
             </button>
           </form>
 
