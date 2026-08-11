@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { sendEmailViaGmail } from "../_shared/gmail.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -77,15 +78,6 @@ Deno.serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const resendApiKey = Deno.env.get("RESEND_API_KEY");
-
-    if (!resendApiKey) {
-      return new Response(
-        JSON.stringify({ error: "RESEND_API_KEY not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const now = new Date().toISOString();
@@ -180,25 +172,12 @@ Deno.serve(async (req: Request) => {
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
 
-        // Send via Resend
-        const res = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${resendApiKey}`,
-          },
-          body: JSON.stringify({
-            from: "WebFitYou <contact@webfityou.org>",
-            to: [contact.email],
-            subject: step.subject || template.titre,
-            html,
-          }),
+        // Send from the connected Google Workspace mailbox.
+        await sendEmailViaGmail({
+          to: contact.email,
+          subject: step.subject || template.titre,
+          html,
         });
-
-        if (!res.ok) {
-          errors++;
-          continue;
-        }
 
         // Log as interaction
         await supabase.from("interactions").insert([{

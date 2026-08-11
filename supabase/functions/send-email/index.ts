@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { sendEmailViaGmail } from "../_shared/gmail.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,14 +20,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-    if (!RESEND_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: "RESEND_API_KEY not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const { to, subject, html, text }: EmailPayload = await req.json();
 
     if (!to || !subject || !html) {
@@ -36,32 +29,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-      },
-      body: JSON.stringify({
-        from: "WebFitYou <contact@webfityou.org>",
-        to: [to],
-        subject,
-        html,
-        text: text || undefined,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      return new Response(
-        JSON.stringify({ error: data.message || "Failed to send email", details: data }),
-        { status: res.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const data = await sendEmailViaGmail({ to, subject, html, text });
 
     return new Response(
-      JSON.stringify({ success: true, id: data.id }),
+      JSON.stringify({ success: true, provider: "gmail", id: data.id, threadId: data.threadId }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

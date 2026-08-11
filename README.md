@@ -38,7 +38,7 @@ Les migrations SQL versionnées se trouvent dans `supabase/migrations/`. Toutes 
 
 | Fonction | Rôle |
 | --- | --- |
-| `send-email` | Envoi d'un email unique via Resend |
+| `send-email` | Envoi d'un email depuis la boîte Google Workspace via Gmail API |
 | `rewrite-email` | Réécriture IA d'un email (OpenRouter) pour varier le contenu des relances |
 | `process-sequences` | Traitement périodique des séquences email automatisées (relances) |
 
