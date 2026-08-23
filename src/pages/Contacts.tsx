@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
 import {
-  Plus, Search, X, CreditCard as Edit, Trash2, Phone, Mail, Building2, Tag,
+  Plus, Search, X, CreditCard as Edit, Trash2, Phone, Mail, Tag,
   Clock, MapPin, Briefcase, Instagram, Facebook, Linkedin, Twitter,
   ChevronLeft, ChevronRight, List, Map, ChevronUp, ChevronDown as ChevronDownIcon,
   Settings2, Eye, EyeOff, Globe, FileText, Hash, Smartphone, Monitor, RefreshCw,
-  Upload, PanelRight, PhoneCall,
+  Upload, PanelRight, PhoneCall, UserRound,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact } from '../types/database';
@@ -59,10 +59,10 @@ type ColumnDef = {
 };
 
 const ALL_COLUMNS: ColumnDef[] = [
-  { key: 'contact', label: 'Contact', defaultVisible: true },
+  { key: 'contact', label: 'Entreprise', defaultVisible: true },
   { key: 'statut', label: 'Statut', defaultVisible: true },
   { key: 'pays', label: 'Pays', defaultVisible: true },
-  { key: 'entreprise', label: 'Entreprise', defaultVisible: true },
+  { key: 'entreprise', label: 'Nom du contact', defaultVisible: true },
   { key: 'secteur', label: 'Secteur', defaultVisible: true },
   { key: 'coordonnees', label: 'Coordonnées', defaultVisible: true },
   { key: 'reseaux', label: 'Réseaux sociaux', defaultVisible: false },
@@ -86,6 +86,17 @@ const emptyForm = {
   siren_siret: '', notes_entreprise: '', site_web: '',
   pagespeed_mobile: null as number | null,
   pagespeed_desktop: null as number | null,
+};
+
+const getPersonName = (contact: Pick<Contact, 'prenom' | 'nom'>) =>
+  [contact.prenom, contact.nom].filter(Boolean).join(' ').trim();
+
+const normalizeName = (value: string) => value.trim().toLocaleLowerCase('fr-FR');
+
+const getCompanyInitials = (company: string) => {
+  const words = company.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  return `${words[0][0] || ''}${words.length > 1 ? words[words.length - 1][0] || '' : ''}`.toUpperCase();
 };
 
 function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
@@ -493,10 +504,10 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {visibleCols.has('contact') && <SortTh col="nom" label="Contact" />}
+                    {visibleCols.has('contact') && <SortTh col="entreprise" label="Entreprise" />}
                     {visibleCols.has('statut') && <SortTh col="statut" label="Statut" />}
                     {visibleCols.has('pays') && <SortTh col="pays" label="Pays" />}
-                    {visibleCols.has('entreprise') && <SortTh col="entreprise" label="Entreprise" />}
+                    {visibleCols.has('entreprise') && <SortTh col="nom" label="Nom du contact" />}
                     {visibleCols.has('secteur') && <SortTh col="secteur_activite" label="Secteur" />}
                     {visibleCols.has('coordonnees') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Coordonnées</th>}
                     {visibleCols.has('reseaux') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Réseaux</th>}
@@ -519,14 +530,14 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                           <div className="flex items-center gap-2.5">
                             <div className="relative flex-shrink-0">
                               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold">
-                                {c.prenom?.[0]?.toUpperCase()}{c.nom?.[0]?.toUpperCase()}
+                                {getCompanyInitials(c.entreprise || getPersonName(c))}
                               </div>
                               {contactedTodayIds.has(c.id) && (
                                 <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" title="Contacté aujourd'hui" />
                               )}
                             </div>
                             <div>
-                              <p className="font-semibold text-slate-900">{c.prenom} {c.nom}</p>
+                              <p className="font-semibold text-slate-900">{c.entreprise || getPersonName(c) || 'Entreprise non renseignée'}</p>
                             </div>
                           </div>
                         </td>
@@ -543,12 +554,12 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                       )}
                       {visibleCols.has('entreprise') && (
                         <td className="px-3 py-3 whitespace-nowrap">
-                          {c.entreprise && (
+                          {getPersonName(c) && normalizeName(getPersonName(c)) !== normalizeName(c.entreprise || '') ? (
                             <div className="flex items-center gap-1.5 text-sm text-slate-700">
-                              <Building2 className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-                              <span className="truncate max-w-32">{c.entreprise}</span>
+                              <UserRound className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                              <span className="truncate max-w-32">{getPersonName(c)}</span>
                             </div>
-                          )}
+                          ) : <span className="text-slate-300 text-xs">—</span>}
                         </td>
                       )}
                       {visibleCols.has('secteur') && (
@@ -746,14 +757,18 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
               <button onClick={() => { setShowModal(false); resetForm(); }} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Entreprise *</label>
+                <input required type="text" value={formData.entreprise} onChange={e => setFormData({ ...formData, entreprise: e.target.value })} placeholder="Nom de l’entreprise" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Prénom *</label>
-                  <input required type="text" value={formData.prenom} onChange={e => setFormData({ ...formData, prenom: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Prénom du contact</label>
+                  <input type="text" value={formData.prenom} onChange={e => setFormData({ ...formData, prenom: e.target.value })} placeholder="Optionnel" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Nom *</label>
-                  <input required type="text" value={formData.nom} onChange={e => setFormData({ ...formData, nom: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Nom du contact</label>
+                  <input type="text" value={formData.nom} onChange={e => setFormData({ ...formData, nom: e.target.value })} placeholder="Optionnel" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -798,10 +813,6 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Téléphone</label>
                   <input type="tel" value={formData.telephone} onChange={e => setFormData({ ...formData, telephone: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Entreprise</label>
-                <input type="text" value={formData.entreprise} onChange={e => setFormData({ ...formData, entreprise: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Adresse</label>
