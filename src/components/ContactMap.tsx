@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MapPin, Search, X, Building2, Phone, Mail, ChevronRight, Briefcase, RotateCcw } from 'lucide-react';
+import { CircleMarker, MapContainer, TileLayer, useMap } from 'react-leaflet';
+import type { Map as LeafletMap } from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { supabase } from '../lib/supabase';
 import type { Contact } from '../types/database';
 
@@ -27,16 +30,11 @@ const SECTEUR_COLORS: Record<string, string> = {
   'Autre': '#64748b',
 };
 const DEFAULT_COLOR = '#3b82f6';
+const DEFAULT_CENTER: [number, number] = [46.603354, 1.888334];
+const DEFAULT_ZOOM = 6;
 
 function getSecteurColor(secteur: string): string {
   return SECTEUR_COLORS[secteur] || DEFAULT_COLOR;
-}
-
-declare global {
-  interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    google: any;
-  }
 }
 
 async function geocodeAddress(contact: Contact): Promise<{ latitude: number; longitude: number } | null> {
@@ -53,36 +51,36 @@ async function geocodeAddress(contact: Contact): Promise<{ latitude: number; lon
   return null;
 }
 
-function loadGoogleMapsScript(apiKey: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (window.google?.maps) { resolve(); return; }
-    const existing = document.getElementById('google-maps-script');
-    if (existing) {
-      existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', reject);
-      return;
-    }
-    const script = document.createElement('script');
-    script.id = 'google-maps-script';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-}
-
 type Props = {
   contacts: Contact[];
   onContactsUpdated: () => void;
 };
 
+function MapViewport({ contacts }: { contacts: Contact[] }) {
+  const map = useMap();
+  const viewportKey = contacts
+    .map(contact => `${contact.id}:${contact.latitude}:${contact.longitude}`)
+    .join('|');
+
+  useEffect(() => {
+    const positions = contacts
+      .filter(contact => contact.latitude != null && contact.longitude != null)
+      .map(contact => [contact.latitude!, contact.longitude!] as [number, number]);
+
+    if (positions.length === 0) {
+      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    } else if (positions.length === 1) {
+      map.setView(positions[0], 13);
+    } else {
+      map.fitBounds(positions, { padding: [40, 40], maxZoom: 13 });
+    }
+  }, [map, viewportKey]);
+
+  return null;
+}
+
 export default function ContactMap({ contacts, onContactsUpdated }: Props) {
-  const mapRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const gMapRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const markersRef = useRef<any[]>([]);
+  const mapRef = useRef<LeafletMap | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSecteur, setFilterSecteur] = useState('');
@@ -111,70 +109,23 @@ export default function ContactMap({ contacts, onContactsUpdated }: Props) {
     return matchesSearch && matchesSecteur;
   });
 
-  useEffect(() => {
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-    loadGoogleMapsScript(apiKey)
-      .then(() => setMapLoaded(true))
-      .catch(err => console.error('Failed to load Google Maps', err));
-  }, []);
-
-  useEffect(() => {
-    if (!mapLoaded || !mapRef.current || gMapRef.current) return;
-    gMapRef.current = new window.google.maps.Map(mapRef.current, {
-      center: { lat: 46.5, lng: 7.0 },
-      zoom: 6,
-      mapTypeControl: false,
-      streetViewControl: false,
-      fullscreenControl: false,
-    });
-  }, [mapLoaded]);
-
-  useEffect(() => {
-    if (!gMapRef.current || !window.google?.maps) return;
-
-    markersRef.current.forEach(m => { m.setMap(null); });
-    markersRef.current = [];
-
-    filteredContacts.forEach(contact => {
-      if (contact.latitude == null || contact.longitude == null) return;
-      const color = getSecteurColor(contact.secteur_activite);
-
-      const svgIcon = {
-        path: 'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z',
-        fillColor: color,
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
-        scale: 1.6,
-        anchor: new window.google.maps.Point(12, 22),
-      };
-
-      const marker = new window.google.maps.Marker({
-        map: gMapRef.current,
-        position: { lat: contact.latitude!, lng: contact.longitude! },
-        icon: svgIcon,
-        title: `${contact.prenom} ${contact.nom}`,
-      });
-
-      marker.addListener('click', () => {
-        setSelectedContact((prev: Contact | null) => prev?.id === contact.id ? null : contact);
-        gMapRef.current?.panTo({ lat: contact.latitude!, lng: contact.longitude! });
-      });
-
-      markersRef.current.push(marker);
-    });
-  }, [filteredContacts, mapLoaded]);
-
   const flyTo = useCallback((contact: Contact) => {
     if (contact.latitude == null || contact.longitude == null) return;
-    gMapRef.current?.panTo({ lat: contact.latitude, lng: contact.longitude });
-    gMapRef.current?.setZoom(14);
+    mapRef.current?.flyTo([contact.latitude, contact.longitude], 14, { duration: 0.7 });
     setSelectedContact(contact);
   }, []);
 
   const resetView = () => {
-    gMapRef.current?.panTo({ lat: 46.5, lng: 7.0 });
-    gMapRef.current?.setZoom(6);
+    if (contactsWithCoords.length === 0) {
+      mapRef.current?.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    } else if (contactsWithCoords.length === 1) {
+      mapRef.current?.setView([contactsWithCoords[0].latitude!, contactsWithCoords[0].longitude!], 13);
+    } else {
+      mapRef.current?.fitBounds(
+        contactsWithCoords.map(contact => [contact.latitude!, contact.longitude!] as [number, number]),
+        { padding: [40, 40], maxZoom: 13 },
+      );
+    }
     setSelectedContact(null);
   };
 
@@ -207,10 +158,10 @@ export default function ContactMap({ contacts, onContactsUpdated }: Props) {
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden" style={{ height: 680 }}>
-      <div className="flex h-full">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-[760px] md:h-[680px]">
+      <div className="flex h-full flex-col md:flex-row">
         {/* Sidebar */}
-        <div className="w-80 flex-shrink-0 border-r border-slate-200 flex flex-col bg-white">
+        <div className="h-72 w-full flex-shrink-0 border-b border-slate-200 flex flex-col bg-white md:h-full md:w-80 md:border-b-0 md:border-r">
           <div className="p-4 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-3">
               <MapPin className="w-4 h-4 text-blue-600 flex-shrink-0" />
@@ -354,8 +305,41 @@ export default function ContactMap({ contacts, onContactsUpdated }: Props) {
         </div>
 
         {/* Map */}
-        <div className="flex-1 relative">
-          <div ref={mapRef} className="w-full h-full" />
+        <div className="flex-1 relative min-h-[360px]">
+          <MapContainer
+            ref={mapRef}
+            center={DEFAULT_CENTER}
+            zoom={DEFAULT_ZOOM}
+            scrollWheelZoom
+            className="h-full w-full"
+            whenReady={() => setMapLoaded(true)}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              subdomains="abcd"
+              url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+            />
+            <MapViewport contacts={filteredContacts} />
+            {filteredContacts.map(contact => (
+              <CircleMarker
+                key={contact.id}
+                center={[contact.latitude!, contact.longitude!]}
+                radius={10}
+                pathOptions={{
+                  color: '#ffffff',
+                  weight: 2,
+                  fillColor: getSecteurColor(contact.secteur_activite),
+                  fillOpacity: 1,
+                }}
+                eventHandlers={{
+                  click: () => {
+                    setSelectedContact(previous => previous?.id === contact.id ? null : contact);
+                    mapRef.current?.panTo([contact.latitude!, contact.longitude!]);
+                  },
+                }}
+              />
+            ))}
+          </MapContainer>
 
           {!mapLoaded && (
             <div className="absolute inset-0 flex items-center justify-center bg-slate-100">
@@ -365,14 +349,14 @@ export default function ContactMap({ contacts, onContactsUpdated }: Props) {
 
           <button
             onClick={resetView}
-            className="absolute top-3 right-3 w-9 h-9 bg-white rounded-lg shadow-md border border-slate-200 flex items-center justify-center hover:bg-slate-50 transition-colors z-10"
+            className="absolute top-3 right-3 w-9 h-9 bg-white rounded-lg shadow-md border border-slate-200 flex items-center justify-center hover:bg-slate-50 transition-colors z-[1000]"
             title="Réinitialiser la vue"
           >
             <RotateCcw className="w-4 h-4 text-slate-700" />
           </button>
 
           {selectedContact && (
-            <div className="absolute bottom-6 left-4 right-4 sm:left-auto sm:right-14 sm:w-72 bg-white rounded-xl shadow-2xl border border-slate-100 p-4 z-10">
+            <div className="absolute bottom-6 left-4 right-4 sm:left-auto sm:right-14 sm:w-72 bg-white rounded-xl shadow-2xl border border-slate-100 p-4 z-[1000]">
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div className="flex items-center gap-3">
                   <div
@@ -449,7 +433,7 @@ export default function ContactMap({ contacts, onContactsUpdated }: Props) {
           )}
 
           {filteredContacts.length === 0 && contactsWithCoords.length === 0 && mapLoaded && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-50/80 pointer-events-none">
+            <div className="absolute inset-0 z-[900] flex flex-col items-center justify-center gap-3 bg-slate-50/80 pointer-events-none">
               <MapPin className="w-12 h-12 text-slate-300" />
               <p className="text-slate-500 font-medium">Aucun contact localisé</p>
               {contactsWithoutCoords.length > 0 && (
