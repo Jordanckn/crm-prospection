@@ -46,10 +46,11 @@ Déploiement : `supabase functions deploy <nom> --project-ref <ref>`.
 
 ## Administration et équipe
 
-Le CRM prend en charge deux rôles :
+Le CRM prend en charge trois niveaux d'accès :
 
-- `admin` : voit l'ensemble de l'activité, crée les comptes, affecte les prospects et consulte les rapports individuels ;
-- `commercial` : ne voit que les prospects, tâches, relances et listes d'appels qui lui sont attribués.
+- `admin` : accès complet, administration des comptes et suppression autorisée ;
+- `editor` : lecture, ajout et modification de son périmètre, sans administration ni suppression ;
+- `contributor` : lecture et ajout dans son périmètre, sans modification, administration ni suppression.
 
 Après déploiement de la migration `20260730090000_add_multi_user_admin.sql`, le compte
 `contact@webfityou.com` devient automatiquement administrateur. Les nouveaux comptes sont

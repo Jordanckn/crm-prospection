@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import Sidebar from './Sidebar';
 import NotificationBell from './NotificationBell';
 import type { Profile } from '../types/database';
+import { roleLabel } from '../contexts/PermissionsContext';
 
 type LayoutProps = {
   currentPage: string;
@@ -41,7 +42,7 @@ export default function Layout({ currentPage, onNavigate, children, profile }: L
             {profile && (
               <div className="hidden text-right sm:block">
                 <p className="text-xs font-semibold text-slate-700">{profile.full_name || profile.email}</p>
-                <p className="text-[10px] uppercase tracking-wide text-slate-400">{profile.role === 'admin' ? 'Administrateur' : 'Commercial'}</p>
+                <p className="max-w-[190px] text-[10px] uppercase tracking-wide text-slate-400">{roleLabel(profile.role)}</p>
               </div>
             )}
             <NotificationBell onNavigate={onNavigate} />

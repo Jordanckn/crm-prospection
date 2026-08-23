@@ -12,7 +12,14 @@ interface EmailPayload {
   subject: string;
   html: string;
   text?: string;
+  attachment?: {
+    filename: string;
+    contentType: string;
+    contentBase64: string;
+  };
 }
+
+const MAX_ATTACHMENT_BASE64_LENGTH = 14_000_000;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -20,7 +27,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { to, subject, html, text }: EmailPayload = await req.json();
+    const { to, subject, html, text, attachment }: EmailPayload = await req.json();
 
     if (!to || !subject || !html) {
       return new Response(
@@ -29,7 +36,28 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const data = await sendEmailViaGmail({ to, subject, html, text });
+    if (attachment) {
+      if (!attachment.filename || !attachment.contentBase64) {
+        return new Response(
+          JSON.stringify({ error: "Pièce jointe invalide." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      if (attachment.contentBase64.length > MAX_ATTACHMENT_BASE64_LENGTH) {
+        return new Response(
+          JSON.stringify({ error: "La pièce jointe dépasse la limite de 10 Mo." }),
+          { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(attachment.contentBase64)) {
+        return new Response(
+          JSON.stringify({ error: "Le contenu de la pièce jointe est invalide." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    const data = await sendEmailViaGmail({ to, subject, html, text, attachment });
 
     return new Response(
       JSON.stringify({ success: true, provider: "gmail", id: data.id, threadId: data.threadId }),

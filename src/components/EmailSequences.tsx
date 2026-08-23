@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Plus, X, Trash2, Play, Pause, Mail, Clock, Users, Check, ChevronRight, CreditCard as EditIcon, Search, MapPin, Briefcase, Brain } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Template, Contact } from '../types/database';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 type SequenceStep = {
   delay_days: number;
@@ -35,6 +36,7 @@ type Enrollment = {
 type EnrollMode = 'individual' | 'sector' | 'location';
 
 export default function EmailSequences() {
+  const { canModify, canDelete } = usePermissions();
   const [sequences, setSequences] = useState<EmailSequence[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -302,11 +304,11 @@ export default function EmailSequences() {
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
                       <button onClick={e => { e.stopPropagation(); openEnrollModal(seq); }} className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors" title="Inscrire des contacts"><Plus className="w-3.5 h-3.5" /></button>
-                      <button onClick={e => { e.stopPropagation(); toggleActif(seq); }} className={`p-1.5 rounded-lg transition-colors ${seq.actif ? 'text-amber-500 hover:bg-amber-50' : 'text-emerald-500 hover:bg-emerald-50'}`} title={seq.actif ? 'Pause' : 'Activer'}>
+                      {canModify && <button onClick={e => { e.stopPropagation(); toggleActif(seq); }} className={`p-1.5 rounded-lg transition-colors ${seq.actif ? 'text-amber-500 hover:bg-amber-50' : 'text-emerald-500 hover:bg-emerald-50'}`} title={seq.actif ? 'Pause' : 'Activer'}>
                         {seq.actif ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); handleEdit(seq); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><EditIcon className="w-3.5 h-3.5" /></button>
-                      <button onClick={e => { e.stopPropagation(); handleDelete(seq.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </button>}
+                      {canModify && <button onClick={e => { e.stopPropagation(); handleEdit(seq); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><EditIcon className="w-3.5 h-3.5" /></button>}
+                      {canDelete && <button onClick={e => { e.stopPropagation(); handleDelete(seq.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                     </div>
                   </div>
                   {/* Steps timeline */}
@@ -501,12 +503,12 @@ export default function EmailSequences() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-500 font-semibold mb-1">Objet email</label>
+                          <label className="block text-[10px] text-slate-500 font-semibold mb-1">Objet personnalisé (facultatif)</label>
                           <input
                             type="text"
                             value={step.subject}
                             onChange={e => updateStep(idx, 'subject', e.target.value)}
-                            placeholder="Objet personnalise..."
+                            placeholder={templates.find(t => t.id === step.template_id)?.objet || 'Objet du template'}
                             className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 outline-none"
                           />
                         </div>

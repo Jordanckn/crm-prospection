@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { Contact } from '../types/database';
 import ContactSearchSelect from '../components/ContactSearchSelect';
 import QuickInteractionModal from '../components/QuickInteractionModal';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 type ListeAppel = {
   id: string;
@@ -37,6 +38,7 @@ function fmtChrono(sec: number): string {
 }
 
 export default function ProgrammationAppels({ onOpenContact }: { onOpenContact?: (id: string) => void }) {
+  const { canModify, canDelete } = usePermissions();
   const [liste, setListe] = useState<ListeAppel[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -532,7 +534,7 @@ export default function ProgrammationAppels({ onOpenContact }: { onOpenContact?:
                   <div className="flex flex-col gap-0.5 flex-shrink-0">
                     <button
                       onClick={() => moveItem(item.id, 'up')}
-                      disabled={idx === 0 || !!activeCallId}
+                      disabled={!canModify || idx === 0 || !!activeCallId}
                       className="p-0.5 text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors"
                     >
                       <ChevronUp className="w-3.5 h-3.5" />
@@ -540,7 +542,7 @@ export default function ProgrammationAppels({ onOpenContact }: { onOpenContact?:
                     <span className="text-xs font-bold text-slate-400 text-center leading-none">{idx + 1}</span>
                     <button
                       onClick={() => moveItem(item.id, 'down')}
-                      disabled={idx === filtered.length - 1 || !!activeCallId}
+                      disabled={!canModify || idx === filtered.length - 1 || !!activeCallId}
                       className="p-0.5 text-slate-300 hover:text-slate-600 disabled:opacity-20 transition-colors"
                     >
                       <ChevronDown className="w-3.5 h-3.5" />
@@ -610,29 +612,29 @@ export default function ProgrammationAppels({ onOpenContact }: { onOpenContact?:
                     ) : (
                       <button
                         onClick={() => startCall(item)}
-                        disabled={!!activeCallId}
+                        disabled={!canModify || !!activeCallId}
                         className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Play className="w-3.5 h-3.5" />
                         Appeler
                       </button>
                     )}
-                    <button
+                    {canModify && <button
                       onClick={() => markDone(item)}
                       disabled={isActive}
                       className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors disabled:opacity-30"
                       title="Marquer comme traité"
                     >
                       <Check className="w-4 h-4" />
-                    </button>
-                    <button
+                    </button>}
+                    {canDelete && <button
                       onClick={() => removeItem(item.id)}
                       disabled={isActive}
                       className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors disabled:opacity-30"
                       title="Retirer de la liste"
                     >
                       <Trash2 className="w-4 h-4" />
-                    </button>
+                    </button>}
                   </div>
                 </div>
               </div>

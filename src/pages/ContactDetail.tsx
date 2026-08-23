@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { ArrowLeft, Phone, Mail, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Interaction, Tache, ContactDocument } from '../types/database';
+import { usePermissions } from '../contexts/PermissionsContext';
 import QuickInteractionModal from '../components/QuickInteractionModal';
 import ContactAddressMap from '../components/ContactAddressMap';
 import SirenEnrichButton from '../components/SirenEnrichButton';
@@ -51,6 +52,7 @@ function fmtSize(bytes: number) {
 type Props = { contactId: string; onBack: () => void; onEdit: (c: Contact) => void };
 
 export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
+  const { canModify, canDelete } = usePermissions();
   const [contact, setContact] = useState<Contact | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [taches, setTaches] = useState<Tache[]>([]);
@@ -259,13 +261,13 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                 <Sparkles className="w-3.5 h-3.5" />
                 Enrichir via IA
               </button>
-              <button
+              {canModify && <button
                 onClick={() => onEdit(contact)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-semibold hover:bg-blue-700 transition-colors"
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 Modifier
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -563,12 +565,12 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <span className="text-xs text-slate-400 whitespace-nowrap mr-1">{fmtDateTime(i.date_heure)}</span>
-                      <button onClick={() => openEditInteraction(i)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Modifier">
+                      {canModify && <button onClick={() => openEditInteraction(i)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Modifier">
                         <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => deleteInteraction(i.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Supprimer">
+                      </button>}
+                      {canDelete && <button onClick={() => deleteInteraction(i.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Supprimer">
                         <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      </button>}
                     </div>
                   </div>
                   {i.notes && (
@@ -655,12 +657,12 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button onClick={() => openEditTache(t)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Modifier">
+                        {canModify && <button onClick={() => openEditTache(t)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Modifier">
                           <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => deleteTache(t.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Supprimer">
+                        </button>}
+                        {canDelete && <button onClick={() => deleteTache(t.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Supprimer">
                           <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   </div>
@@ -737,13 +739,13 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                     >
                       <Download className="w-4 h-4" />
                     </button>
-                    <button
+                    {canDelete && <button
                       onClick={() => deleteDocument(doc)}
                       className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
                       title="Supprimer"
                     >
                       <Trash2 className="w-4 h-4" />
-                    </button>
+                    </button>}
                   </div>
                 </div>
               ))}

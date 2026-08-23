@@ -6,6 +6,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { Tache, Contact } from '../types/database';
 import RelanceTimeline, { ETAPES_CONFIG, RelanceEtape } from '../components/RelanceTimeline';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 type TacheWithContact = Tache & { contacts?: Contact | null };
 
@@ -34,6 +35,7 @@ function isPast(dateStr: string): boolean {
 }
 
 export default function Taches() {
+  const { canModify, canDelete } = usePermissions();
   const [taches, setTaches] = useState<TacheWithContact[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [relanceGroups, setRelanceGroups] = useState<RelanceGroup[]>([]);
@@ -269,7 +271,7 @@ export default function Taches() {
               return (
                 <div key={tache.id} className={`bg-white rounded-xl border shadow-sm p-4 hover:shadow-md transition-all ${overdue ? 'border-red-200 bg-red-50/50' : 'border-slate-200'} ${tache.statut === 'Terminé' ? 'opacity-60' : ''}`}>
                   <div className="flex items-start gap-3">
-                    <button onClick={() => toggleStatut(tache)}
+                    <button onClick={() => toggleStatut(tache)} disabled={!canModify}
                       className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors ${tache.statut === 'Terminé' ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 hover:border-blue-500'}`}
                     >
                       {tache.statut === 'Terminé' && <Check className="w-3 h-3 text-white" />}
@@ -295,8 +297,8 @@ export default function Taches() {
                           {tache.description && <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{tache.description}</p>}
                         </div>
                         <div className="flex gap-1 flex-shrink-0">
-                          <button onClick={() => handleEdit(tache)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleDelete(tache.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                          {canModify && <button onClick={() => handleEdit(tache)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>}
+                          {canDelete && <button onClick={() => handleDelete(tache.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                         </div>
                       </div>
                     </div>
@@ -384,11 +386,11 @@ export default function Taches() {
                     <div className="px-5 pb-5 pt-2 border-t border-slate-100">
                       <RelanceTimeline
                         etapes={group.etapes}
-                        onMarkDone={id => markRelance(id, 'fait')}
-                        onMarkIgnore={id => markRelance(id, 'ignore')}
-                        onMarkPending={id => markRelance(id, 'en_attente')}
+                        onMarkDone={canModify ? id => markRelance(id, 'fait') : undefined}
+                        onMarkIgnore={canModify ? id => markRelance(id, 'ignore') : undefined}
+                        onMarkPending={canModify ? id => markRelance(id, 'en_attente') : undefined}
                       />
-                      <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+                      {canDelete && <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
                         <button
                           onClick={async () => {
                             if (!confirm('Supprimer toute la séquence pour ce contact ?')) return;
@@ -399,7 +401,7 @@ export default function Taches() {
                         >
                           <Trash2 className="w-3 h-3" />Supprimer la séquence
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   )}
                 </div>

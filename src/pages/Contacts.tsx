@@ -13,6 +13,7 @@ import CsvImport from '../components/CsvImport';
 import ContactSidePanel from '../components/ContactSidePanel';
 import SirenEnrichButton from '../components/SirenEnrichButton';
 import type { SirenResult } from '../lib/siren';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 const STATUTS = ['Nouveau', 'En cours', 'Converti', 'Perdu'] as const;
 const TAGS_DISPONIBLES = ['Client', 'Prospect', 'Partenaire', 'VIP', 'Prioritaire', 'À relancer'];
@@ -101,6 +102,7 @@ type ContactsProps = {
 };
 
 export default function Contacts({ onOpenContact, editTarget, onEditTargetHandled }: ContactsProps = {}) {
+  const { canModify, canDelete } = usePermissions();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -132,7 +134,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   useEffect(() => { loadContacts(); }, []);
 
   useEffect(() => {
-    if (editTarget) {
+    if (editTarget && canModify) {
       handleEdit(editTarget);
       onEditTargetHandled?.();
     }
@@ -239,6 +241,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   };
 
   const handleEdit = (c: Contact) => {
+    if (!canModify) return;
     setEditingContact(c);
     setFormData({
       prenom: c.prenom, nom: c.nom, email: c.email, telephone: c.telephone,
@@ -675,8 +678,8 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                           >
                             <PhoneCall className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleDelete(c.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                          {canModify && <button onClick={() => handleEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>}
+                          {canDelete && <button onClick={() => handleDelete(c.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                         </div>
                       </td>
                     </tr>

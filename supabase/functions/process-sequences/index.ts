@@ -175,7 +175,7 @@ Deno.serve(async (req: Request) => {
         // Send from the connected Google Workspace mailbox.
         await sendEmailViaGmail({
           to: contact.email,
-          subject: step.subject || template.titre,
+          subject: step.subject || template.objet || template.titre,
           html,
         });
 
@@ -187,7 +187,7 @@ Deno.serve(async (req: Request) => {
           date_heure: new Date().toISOString(),
           duree: 0,
           resultat: "",
-          notes: `[Sequence auto] ${sequence.titre} - Etape ${currentStep + 1}: ${step.subject || template.titre}`,
+          notes: `[Sequence auto] ${sequence.titre} - Etape ${currentStep + 1}: ${step.subject || template.objet || template.titre}`,
         }]);
 
         await supabase.from("contacts")

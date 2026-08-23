@@ -1,10 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Plus, X, CreditCard as Edit, Trash2, Mail, MessageCircle, Phone, FileText, Copy, Eye, Send, Code, Type, Check, AlertTriangle, Zap } from 'lucide-react';
+import { Plus, X, CreditCard as Edit, Trash2, Mail, MessageCircle, Phone, FileText, Copy, Eye, Send, Code, Type, Check, AlertTriangle, Zap, Paperclip } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Template, ScriptPhoning, Contact } from '../types/database';
 import EmailSequences from '../components/EmailSequences';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 const TYPES = ['Email', 'WhatsApp', 'SMS'] as const;
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const separatorIndex = result.indexOf(',');
+      if (separatorIndex === -1) reject(new Error('Impossible de lire la pièce jointe.'));
+      else resolve(result.slice(separatorIndex + 1));
+    };
+    reader.onerror = () => reject(new Error('Impossible de lire la pièce jointe.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 function getTypeIcon(type: string) {
   switch (type) {
@@ -29,6 +45,7 @@ function replaceVariables(content: string, vars: Record<string, string>): string
 }
 
 export default function Templates() {
+  const { canModify, canDelete } = usePermissions();
   const [mainTab, setMainTab] = useState<'templates' | 'sequences'>('templates');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [scripts, setScripts] = useState<ScriptPhoning[]>([]);
@@ -45,11 +62,13 @@ export default function Templates() {
   const [sendTo, setSendTo] = useState('');
   const [sendSubject, setSendSubject] = useState('');
   const [sendContactId, setSendContactId] = useState('');
+  const [sendAttachment, setSendAttachment] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const [templateForm, setTemplateForm] = useState({
     titre: '',
+    objet: '',
     type: 'Email' as Template['type'],
     contenu: '',
     variables: [] as string[],
@@ -78,7 +97,7 @@ export default function Templates() {
   };
 
   const resetTemplateForm = () => {
-    setTemplateForm({ titre: '', type: 'Email', contenu: '', variables: [] });
+    setTemplateForm({ titre: '', objet: '', type: 'Email', contenu: '', variables: [] });
     setEditingTemplate(null);
   };
 
@@ -119,7 +138,7 @@ export default function Templates() {
 
   const handleEditTemplate = (template: Template) => {
     setEditingTemplate(template);
-    setTemplateForm({ titre: template.titre, type: template.type, contenu: template.contenu, variables: template.variables });
+    setTemplateForm({ titre: template.titre, objet: template.objet || template.titre, type: template.type, contenu: template.contenu, variables: template.variables });
     setShowTemplateModal(true);
   };
 
@@ -153,9 +172,10 @@ export default function Templates() {
 
   const openSendModal = (template: Template) => {
     setPreviewTemplate(template);
-    setSendSubject(template.titre);
+    setSendSubject(template.objet || template.titre);
     setSendTo('');
     setSendContactId('');
+    setSendAttachment(null);
     setSendResult(null);
     setShowSendModal(true);
   };
@@ -179,6 +199,11 @@ export default function Templates() {
 
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-email`;
       const { data: { session } } = await supabase.auth.getSession();
+      const attachment = sendAttachment ? {
+        filename: sendAttachment.name,
+        contentType: sendAttachment.type || 'application/octet-stream',
+        contentBase64: await fileToBase64(sendAttachment),
+      } : undefined;
 
       const res = await fetch(apiUrl, {
         method: 'POST',
@@ -191,6 +216,7 @@ export default function Templates() {
           subject: sendSubject,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
           text: isHtml ? undefined : html,
+          attachment,
         }),
       });
 
@@ -205,7 +231,7 @@ export default function Templates() {
             date_heure: new Date().toISOString(),
             duree: 0,
             resultat: '',
-            notes: `Email envoye : ${sendSubject}`,
+            notes: `Email envoye : ${sendSubject}${sendAttachment ? ` (PJ : ${sendAttachment.name})` : ''}`,
           }]);
           await supabase.from('contacts').update({ derniere_interaction: new Date().toISOString() }).eq('id', sendContactId);
         }
@@ -313,10 +339,13 @@ export default function Templates() {
                       {template.type === 'Email' && (
                         <button onClick={e => { e.stopPropagation(); openSendModal(template); }} className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors" title="Envoyer"><Send className="w-3.5 h-3.5" /></button>
                       )}
-                      <button onClick={e => { e.stopPropagation(); handleEditTemplate(template); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Modifier"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={e => { e.stopPropagation(); handleDeleteTemplate(template.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {canModify && <button onClick={e => { e.stopPropagation(); handleEditTemplate(template); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Modifier"><Edit className="w-3.5 h-3.5" /></button>}
+                      {canDelete && <button onClick={e => { e.stopPropagation(); handleDeleteTemplate(template.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer"><Trash2 className="w-3.5 h-3.5" /></button>}
                     </div>
                   </div>
+                  {template.type === 'Email' && (
+                    <p className="mt-2 truncate text-xs text-slate-600"><span className="font-semibold">Objet :</span> {template.objet || template.titre}</p>
+                  )}
                   <p className="text-xs text-slate-500 mt-2 line-clamp-2 leading-relaxed">{template.contenu.replace(/<[^>]*>/g, '').slice(0, 120)}</p>
                   {template.variables.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
@@ -351,11 +380,11 @@ export default function Templates() {
                       {script.actif && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-bold flex-shrink-0">ACTIF</span>}
                     </div>
                     <div className="flex gap-0.5 flex-shrink-0">
-                      <button onClick={() => toggleScriptActif(script)} className={`p-1.5 rounded-lg transition-colors ${script.actif ? 'text-slate-500 hover:bg-slate-100' : 'text-emerald-500 hover:bg-emerald-50'}`} title={script.actif ? 'Desactiver' : 'Activer'}>
+                      {canModify && <button onClick={() => toggleScriptActif(script)} className={`p-1.5 rounded-lg transition-colors ${script.actif ? 'text-slate-500 hover:bg-slate-100' : 'text-emerald-500 hover:bg-emerald-50'}`} title={script.actif ? 'Desactiver' : 'Activer'}>
                         <Check className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => handleEditScript(script)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleDeleteScript(script.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </button>}
+                      {canModify && <button onClick={() => handleEditScript(script)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit className="w-3.5 h-3.5" /></button>}
+                      {canDelete && <button onClick={() => handleDeleteScript(script.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>}
                     </div>
                   </div>
                 </div>
@@ -430,7 +459,7 @@ export default function Templates() {
                               </div>
                               <div className="flex items-center gap-2 text-xs">
                                 <span className="font-semibold text-slate-500 w-10">Objet :</span>
-                                <span className="font-semibold text-slate-900">{previewTemplate.titre}</span>
+                                <span className="font-semibold text-slate-900">{previewTemplate.objet || previewTemplate.titre}</span>
                               </div>
                             </div>
                             {/* Email body */}
@@ -516,8 +545,9 @@ export default function Templates() {
             <form onSubmit={handleTemplateSubmit} className="p-6 space-y-5">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Titre *</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Titre interne *</label>
                   <input required type="text" value={templateForm.titre} onChange={e => setTemplateForm({ ...templateForm, titre: e.target.value })} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Premier contact commercial" />
+                  <p className="mt-1 text-[11px] text-slate-400">Visible uniquement dans le CRM pour retrouver le modèle.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Type *</label>
@@ -535,6 +565,13 @@ export default function Templates() {
                   </div>
                 </div>
               </div>
+              {templateForm.type === 'Email' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Objet du mail *</label>
+                  <input required type="text" value={templateForm.objet} onChange={e => setTemplateForm({ ...templateForm, objet: e.target.value })} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Une idée pour développer votre visibilité" />
+                  <p className="mt-1 text-[11px] text-slate-400">C’est cet objet que le destinataire verra dans sa boîte mail.</p>
+                </div>
+              )}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide">Contenu *</label>
@@ -642,6 +679,43 @@ export default function Templates() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Objet *</label>
                 <input type="text" required value={sendSubject} onChange={e => setSendSubject(e.target.value)} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Pièce jointe (optionnelle)</label>
+                {sendAttachment ? (
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Paperclip className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-700">{sendAttachment.name}</p>
+                        <p className="text-xs text-slate-500">{(sendAttachment.size / 1024 / 1024).toFixed(2)} Mo</p>
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => setSendAttachment(null)} className="rounded-lg p-1.5 text-slate-500 hover:bg-white hover:text-red-600" title="Retirer la pièce jointe">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700">
+                    <Paperclip className="h-4 w-4" /> Ajouter un fichier
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        if (file.size > MAX_ATTACHMENT_SIZE) {
+                          setSendResult({ success: false, message: 'La pièce jointe ne doit pas dépasser 10 Mo.' });
+                          return;
+                        }
+                        setSendResult(null);
+                        setSendAttachment(file);
+                      }}
+                    />
+                  </label>
+                )}
+                <p className="mt-1 text-[11px] text-slate-400">Un fichier maximum, limité à 10 Mo.</p>
               </div>
 
               {/* Mini preview */}

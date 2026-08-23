@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Profile, Tache } from '../types/database';
+import { roleLabel } from '../contexts/PermissionsContext';
 
 type Period = 'day' | 'week' | 'month';
 type AdminTab = 'equipe' | 'affectations' | 'pilotage' | 'integrations';
@@ -58,7 +59,7 @@ export default function Administration() {
   const [message, setMessage] = useState('');
   const [period, setPeriod] = useState<Period>('week');
   const [stats, setStats] = useState({ contacts: 0, appels: 0, messages: 0, taches: 0, terminees: 0, minutes: 0 });
-  const [newUser, setNewUser] = useState({ full_name: '', email: '', password: '', role: 'commercial' as Profile['role'] });
+  const [newUser, setNewUser] = useState({ full_name: '', email: '', password: '', role: 'contributor' as Profile['role'] });
   const [apiClients, setApiClients] = useState<ApiClient[]>([]);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [integrationName, setIntegrationName] = useState('OpenClaw CRM');
@@ -88,7 +89,7 @@ export default function Administration() {
     const team = profilesRes.data || [];
     setProfiles(team);
     setContacts(contactsRes.data || []);
-    setSelectedUserId(current => current || team.find(p => p.role === 'commercial' && p.active)?.id || '');
+    setSelectedUserId(current => current || team.find(p => p.role !== 'admin' && p.active)?.id || '');
     setLoading(false);
   }, []);
 
@@ -193,7 +194,7 @@ export default function Administration() {
     await loadIntegrations();
   };
 
-  const commercialProfiles = profiles.filter(profile => profile.role === 'commercial');
+  const commercialProfiles = profiles.filter(profile => profile.role !== 'admin');
   const selectedProfile = profiles.find(profile => profile.id === selectedUserId);
   const filteredContacts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase('fr');
@@ -216,19 +217,23 @@ export default function Administration() {
     if (error) setMessage(`Erreur : ${error.message}`);
     else {
       setMessage('Utilisateur créé. Il peut maintenant se connecter au CRM.');
-      setNewUser({ full_name: '', email: '', password: '', role: 'commercial' });
+      setNewUser({ full_name: '', email: '', password: '', role: 'contributor' });
       await loadBaseData();
     }
     setSaving(false);
   };
 
   const updateProfile = async (profile: Profile, changes: Partial<Profile>) => {
-    if (profile.id === (await supabase.auth.getUser()).data.user?.id && (changes.active === false || changes.role === 'commercial')) {
+    if (profile.id === (await supabase.auth.getUser()).data.user?.id && (changes.active === false || (changes.role && changes.role !== 'admin'))) {
       setMessage("Vous ne pouvez pas désactiver votre propre compte administrateur.");
       return;
     }
-    await supabase.from('profiles').update({ ...changes, updated_at: new Date().toISOString() }).eq('id', profile.id);
+    setSaving(true);
+    setMessage('');
+    const { error } = await supabase.functions.invoke('admin-users', { body: { id: profile.id, ...changes }, method: 'PATCH' });
+    setMessage(error ? `Erreur : ${error.message}` : `Droits de ${profile.full_name || profile.email} mis à jour.`);
     await loadBaseData();
+    setSaving(false);
   };
 
   const toggleContact = (id: string) => {
@@ -340,10 +345,16 @@ export default function Administration() {
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
             <input required minLength={8} type="password" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} placeholder="Mot de passe (8 caractères min.)"
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
-            <select value={newUser.role} onChange={e => setNewUser({ ...newUser, role: e.target.value as Profile['role'] })}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
-              <option value="commercial">Commercial</option><option value="admin">Administrateur</option>
-            </select>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-slate-600">Niveau d'accès</label>
+              <select value={newUser.role} onChange={e => setNewUser({ ...newUser, role: e.target.value as Profile['role'] })}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                <option value="contributor">Lecture + ajout</option>
+                <option value="editor">Lecture + ajout + modification</option>
+                <option value="admin">Administrateur complet</option>
+              </select>
+              <p className="mt-1.5 text-xs text-slate-500">Les comptes non administrateurs ne peuvent jamais supprimer de données.</p>
+            </div>
             <button disabled={saving || !multiUserEnabled} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
               <Plus className="h-4 w-4" />{multiUserEnabled ? "Créer l'utilisateur" : 'Déploiement Supabase requis'}
             </button>
@@ -360,13 +371,18 @@ export default function Administration() {
                   <div className="min-w-[180px] flex-1">
                     <p className="font-semibold text-slate-900">{profile.full_name || 'Sans nom'}</p>
                     <p className="text-xs text-slate-500">{profile.email}</p>
+                    <p className="mt-0.5 text-[11px] font-medium text-blue-600">{roleLabel(profile.role)}</p>
                   </div>
                   <select value={profile.role} onChange={e => updateProfile(profile, { role: e.target.value as Profile['role'] })}
-                    className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs">
-                    <option value="commercial">Commercial</option><option value="admin">Administrateur</option>
+                    disabled={saving || profile.email.toLowerCase() === 'contact@webfityou.com'}
+                    className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs disabled:cursor-not-allowed disabled:bg-slate-100">
+                    <option value="contributor">Lecture + ajout</option>
+                    <option value="editor">Lecture + ajout + modification</option>
+                    <option value="admin">Administrateur</option>
                   </select>
                   <button onClick={() => updateProfile(profile, { active: !profile.active })}
-                    className={`rounded-lg px-3 py-2 text-xs font-semibold ${profile.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                    disabled={saving || profile.email.toLowerCase() === 'contact@webfityou.com'}
+                    className={`rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${profile.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                     {profile.active ? 'Actif' : 'Désactivé'}
                   </button>
                 </div>

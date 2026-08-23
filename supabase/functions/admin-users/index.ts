@@ -11,6 +11,11 @@ const corsHeaders = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: corsHeaders });
 
+const allowedRoles = new Set(["admin", "editor", "contributor"]);
+const normalizeRole = (value: unknown) => allowedRoles.has(String(value))
+  ? String(value)
+  : "contributor";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders });
 
@@ -53,7 +58,7 @@ Deno.serve(async (req: Request) => {
       const email = String(body.email || "").trim().toLowerCase();
       const password = String(body.password || "");
       const fullName = String(body.full_name || "").trim();
-      const role = body.role === "admin" ? "admin" : "commercial";
+      const role = normalizeRole(body.role);
       if (!email || password.length < 8 || !fullName) {
         return json({ error: "Nom, email et mot de passe de 8 caractères minimum requis." }, 400);
       }
@@ -80,13 +85,13 @@ Deno.serve(async (req: Request) => {
     if (req.method === "PATCH") {
       const id = String(body.id || "");
       if (!id) return json({ error: "Utilisateur manquant." }, 400);
-      if (id === user.id && (body.active === false || body.role === "commercial")) {
+      if (id === user.id && (body.active === false || (body.role && body.role !== "admin"))) {
         return json({ error: "Vous ne pouvez pas retirer vos propres droits administrateur." }, 400);
       }
 
       const updates: Record<string, unknown> = {};
       if (typeof body.full_name === "string") updates.full_name = body.full_name.trim();
-      if (body.role === "admin" || body.role === "commercial") updates.role = body.role;
+      if (allowedRoles.has(String(body.role))) updates.role = body.role;
       if (typeof body.active === "boolean") updates.active = body.active;
       updates.updated_at = new Date().toISOString();
 

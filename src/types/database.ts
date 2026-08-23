@@ -82,7 +82,7 @@ export type Objectif = {
   user_id: string;
 };
 
-export type UserRole = 'admin' | 'commercial';
+export type UserRole = 'admin' | 'editor' | 'contributor';
 
 export type Profile = {
   id: string;
@@ -98,6 +98,7 @@ export type Profile = {
 export type Template = {
   id: string;
   titre: string;
+  objet: string;
   type: 'Email' | 'WhatsApp' | 'SMS';
   contenu: string;
   variables: string[];

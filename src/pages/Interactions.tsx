@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase';
 import type { Interaction, Contact, Template } from '../types/database';
 import ContactSearchSelect from '../components/ContactSearchSelect';
 import ContactSidePanel from '../components/ContactSidePanel';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 const TYPES = ['Appel', 'Email', 'WhatsApp', 'SMS', 'Facebook', 'Instagram'] as const;
 const RESULTATS = ['Pas de réponse', 'Répondu', 'Intéressé', 'Non intéressé', 'Relance'] as const;
@@ -69,6 +70,7 @@ type Props = {
 };
 
 export default function Interactions({ onOpenContact }: Props) {
+  const { canModify, canDelete } = usePermissions();
   const [interactions, setInteractions] = useState<(Interaction & { contacts?: Contact })[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -146,7 +148,7 @@ export default function Interactions({ onOpenContact }: Props) {
         },
         body: JSON.stringify({
           to: contact.email,
-          subject: template.titre,
+          subject: template.objet || template.titre,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
         }),
       });
@@ -462,12 +464,12 @@ export default function Interactions({ onOpenContact }: Props) {
                             {emailSentFeedback.msg}
                           </span>
                         )}
-                        <button onClick={() => handleEdit(interaction)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Modifier">
+                        {canModify && <button onClick={() => handleEdit(interaction)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Modifier">
                           <CreditCard className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => handleDelete(interaction.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer">
+                        </button>}
+                        {canDelete && <button onClick={() => handleDelete(interaction.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer">
                           <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        </button>}
                       </div>
                     </td>
                   </tr>

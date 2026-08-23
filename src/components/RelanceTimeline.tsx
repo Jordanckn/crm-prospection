@@ -23,9 +23,9 @@ export { ETAPES_CONFIG };
 
 type Props = {
   etapes: RelanceEtape[];
-  onMarkDone: (id: string) => void;
-  onMarkIgnore: (id: string) => void;
-  onMarkPending: (id: string) => void;
+  onMarkDone?: (id: string) => void;
+  onMarkIgnore?: (id: string) => void;
+  onMarkPending?: (id: string) => void;
   compact?: boolean;
 };
 
@@ -101,7 +101,7 @@ export default function RelanceTimeline({ etapes, onMarkDone, onMarkIgnore, onMa
               </div>
 
               {/* Actions */}
-              {isPending && (
+              {isPending && onMarkDone && onMarkIgnore && (
                 <div className="flex gap-1">
                   <button
                     onClick={() => onMarkDone(e.id)}
@@ -119,7 +119,7 @@ export default function RelanceTimeline({ etapes, onMarkDone, onMarkIgnore, onMa
                   </button>
                 </div>
               )}
-              {(isDone || isIgnored) && (
+              {(isDone || isIgnored) && onMarkPending && (
                 <button
                   onClick={() => onMarkPending(e.id)}
                   className="text-xs text-slate-400 hover:text-slate-600 underline"

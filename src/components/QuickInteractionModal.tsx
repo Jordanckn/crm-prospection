@@ -139,7 +139,7 @@ export default function QuickInteractionModal({ contact, initialDuration = 0, in
         },
         body: JSON.stringify({
           to: contact.email,
-          subject: template.titre,
+          subject: template.objet || template.titre,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
         }),
       });

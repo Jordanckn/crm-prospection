@@ -3,6 +3,11 @@ type GmailSendInput = {
   subject: string;
   html: string;
   text?: string;
+  attachment?: {
+    filename: string;
+    contentType: string;
+    contentBase64: string;
+  };
 };
 
 type GmailSendResult = {
@@ -32,6 +37,8 @@ const base64Url = (value: string) => utf8Base64(value)
   .replace(/\+/g, "-")
   .replace(/\//g, "_")
   .replace(/=+$/g, "");
+
+const wrapBase64 = (value: string) => value.match(/.{1,76}/g)?.join("\r\n") || "";
 
 export const htmlToText = (html: string) => html
   .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -76,26 +83,59 @@ function mimeMessage(input: GmailSendInput) {
   }
   if (!subject) throw new Error("Objet de l'e-mail manquant.");
 
-  const boundary = `wfy_${crypto.randomUUID().replaceAll("-", "")}`;
+  const alternativeBoundary = `wfy_alt_${crypto.randomUUID().replaceAll("-", "")}`;
   const text = input.text?.trim() || htmlToText(input.html);
-  return [
+  const alternativeParts = [
+    `--${alternativeBoundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrapBase64(utf8Base64(text)),
+    `--${alternativeBoundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrapBase64(utf8Base64(input.html)),
+    `--${alternativeBoundary}--`,
+  ];
+
+  const headers = [
     `From: WebFitYou <${stripHeaderBreaks(fromEmail)}>`,
     `To: ${to}`,
     `Subject: =?UTF-8?B?${utf8Base64(subject)}?=`,
     "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ];
+
+  if (!input.attachment) {
+    return [
+      ...headers,
+      `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+      "",
+      ...alternativeParts,
+      "",
+    ].join("\r\n");
+  }
+
+  const filename = stripHeaderBreaks(input.attachment.filename) || "piece-jointe";
+  const contentType = stripHeaderBreaks(input.attachment.contentType) || "application/octet-stream";
+  const encodedFilename = `=?UTF-8?B?${utf8Base64(filename)}?=`;
+  const mixedBoundary = `wfy_mixed_${crypto.randomUUID().replaceAll("-", "")}`;
+
+  return [
+    ...headers,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     "",
-    `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+    "",
+    ...alternativeParts,
+    `--${mixedBoundary}`,
+    `Content-Type: ${contentType}; name="${encodedFilename}"`,
     "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${encodedFilename}"`,
     "",
-    utf8Base64(text),
-    `--${boundary}`,
-    "Content-Type: text/html; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    utf8Base64(input.html),
-    `--${boundary}--`,
+    wrapBase64(input.attachment.contentBase64),
+    `--${mixedBoundary}--`,
     "",
   ].join("\r\n");
 }

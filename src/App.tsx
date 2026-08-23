@@ -15,6 +15,7 @@ import ProgrammationAppels from './pages/ProgrammationAppels';
 import Administration from './pages/Administration';
 import { supabase } from './lib/supabase';
 import type { Contact, Profile } from './types/database';
+import { PermissionsProvider } from './contexts/PermissionsContext';
 
 type SessionUser = {
   id: string;
@@ -29,7 +30,7 @@ const legacyProfile = (user: SessionUser): Profile => {
     id: user.id,
     email,
     full_name: user.user_metadata?.full_name || email.split('@')[0] || 'Utilisateur',
-    role: email.toLowerCase() === 'contact@webfityou.com' ? 'admin' : 'commercial',
+    role: email.toLowerCase() === 'contact@webfityou.com' ? 'admin' : 'contributor',
     active: true,
     manager_id: null,
     created_at: now,
@@ -166,9 +167,11 @@ function App() {
   }
 
   return (
-    <Layout currentPage={currentPage} onNavigate={handleNavigate} profile={profile}>
-      {renderPage()}
-    </Layout>
+    <PermissionsProvider profile={profile}>
+      <Layout currentPage={currentPage} onNavigate={handleNavigate} profile={profile}>
+        {renderPage()}
+      </Layout>
+    </PermissionsProvider>
   );
 }
 
