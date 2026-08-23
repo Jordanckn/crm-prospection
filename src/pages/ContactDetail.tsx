@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowLeft, Phone, Mail, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, MailX, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Interaction, Tache, ContactDocument } from '../types/database';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -9,6 +9,7 @@ import SirenEnrichButton from '../components/SirenEnrichButton';
 import AiEnrichModal from '../components/AiEnrichModal';
 import PageSpeedPanel from '../components/PageSpeedPanel';
 import type { SirenResult } from '../lib/siren';
+import { useBrand } from '../contexts/BrandContext';
 
 const STATUT_COLORS: Record<string, string> = {
   'Nouveau': 'bg-slate-100 text-slate-700 border-slate-300',
@@ -53,6 +54,7 @@ type Props = { contactId: string; onBack: () => void; onEdit: (c: Contact) => vo
 
 export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
   const { canModify, canDelete } = usePermissions();
+  const { brand } = useBrand();
   const [contact, setContact] = useState<Contact | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [taches, setTaches] = useState<Tache[]>([]);
@@ -202,6 +204,19 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
     loadAll();
   };
 
+  const toggleEmailOptOut = async () => {
+    if (!contact) return;
+    const optingOut = !contact.email_opted_out_at;
+    if (!confirm(optingOut
+      ? `Bloquer tous les futurs emails ${brand.name} vers ${contact.email} ?`
+      : `Autoriser de nouveau les emails vers ${contact.email} ?`)) return;
+    await supabase.from('contacts').update({
+      email_opted_out_at: optingOut ? new Date().toISOString() : null,
+      email_opt_out_reason: optingOut ? 'Demande reçue par email' : '',
+    }).eq('id', contact.id);
+    await loadAll();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -267,6 +282,14 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 Modifier
+              </button>}
+              {canModify && contact.email && <button
+                onClick={toggleEmailOptOut}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${contact.email_opted_out_at ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' : 'bg-white text-slate-600 hover:bg-slate-100'}`}
+                title={contact.email_opted_out_at ? 'Réautoriser les emails' : 'Marquer comme désinscrit'}
+              >
+                <MailX className="h-3.5 w-3.5" />
+                {contact.email_opted_out_at ? 'Désinscrit' : 'Désinscription'}
               </button>}
             </div>
           </div>

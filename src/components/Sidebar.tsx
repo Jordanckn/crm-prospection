@@ -4,6 +4,7 @@ import ScriptModal from './ScriptModal';
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types/database';
 import type { LucideIcon } from 'lucide-react';
+import { useBrand } from '../contexts/BrandContext';
 
 type MenuItem = {
   id: string;
@@ -39,6 +40,7 @@ type SidebarProps = {
 
 export default function Sidebar({ currentPage, onNavigate, profile }: SidebarProps) {
   const [showScriptModal, setShowScriptModal] = useState(false);
+  const { brand, brands, switching, switchBrand } = useBrand();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -51,13 +53,25 @@ export default function Sidebar({ currentPage, onNavigate, profile }: SidebarPro
         <div className="px-5 py-5 border-b border-slate-800">
           <div className="flex items-center gap-3">
             <img
-              src="https://ptzpnswtgevfxfeosjfj.supabase.co/storage/v1/object/public/Images/Webfityou-logo-seo-siteweb-ia-complet.png"
-              alt="WebFitYou Logo"
+              src={brand.logo_url}
+              alt={`${brand.name} Logo`}
               className="w-10 h-10 rounded-xl object-cover flex-shrink-0"
             />
-            <div className="min-w-0">
-              <h1 className="text-base font-bold text-white leading-tight">WebFitYou</h1>
-              <p className="text-slate-400 text-xs mt-0.5">Connect CRM</p>
+            <div className="min-w-0 flex-1">
+              {brands.length > 1 ? (
+                <select
+                  aria-label="Espace de marque"
+                  value={brand.code}
+                  disabled={switching}
+                  onChange={event => void switchBrand(event.target.value)}
+                  className="w-full cursor-pointer border-0 bg-transparent p-0 text-base font-bold leading-tight text-white outline-none disabled:opacity-60"
+                >
+                  {brands.map(item => <option key={item.id} value={item.code} className="bg-slate-950">{item.name}</option>)}
+                </select>
+              ) : (
+                <h1 className="text-base font-bold text-white leading-tight">{brand.name}</h1>
+              )}
+              <p className="text-slate-400 text-xs mt-0.5">{switching ? 'Changement…' : 'Connect CRM'}</p>
             </div>
           </div>
         </div>

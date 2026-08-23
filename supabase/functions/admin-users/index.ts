@@ -36,7 +36,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: caller } = await service
       .from("profiles")
-      .select("role, active")
+      .select("role, active, active_brand_id")
       .eq("id", user.id)
       .maybeSingle();
     if (!caller?.active || caller.role !== "admin") {
@@ -77,7 +77,12 @@ Deno.serve(async (req: Request) => {
         role,
         active: true,
         manager_id: user.id,
+        active_brand_id: caller.active_brand_id,
       }).eq("id", data.user.id);
+      await service.from("profile_brands").upsert({
+        profile_id: data.user.id,
+        brand_id: caller.active_brand_id,
+      });
 
       return json({ user: data.user }, 201);
     }

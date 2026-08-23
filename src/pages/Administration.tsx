@@ -6,6 +6,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { Contact, Profile, Tache } from '../types/database';
 import { roleLabel } from '../contexts/PermissionsContext';
+import { useBrand } from '../contexts/BrandContext';
 
 type Period = 'day' | 'week' | 'month';
 type AdminTab = 'equipe' | 'affectations' | 'pilotage' | 'integrations';
@@ -48,6 +49,7 @@ function periodStart(period: Period) {
 }
 
 export default function Administration() {
+  const { brand } = useBrand();
   const [tab, setTab] = useState<AdminTab>('equipe');
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -83,7 +85,7 @@ export default function Administration() {
       return;
     }
     const [profilesRes, contactsRes] = await Promise.all([
-      supabase.from('profiles').select('*').order('full_name'),
+      supabase.from('profiles').select('*, profile_brands!inner(brand_id)').eq('profile_brands.brand_id', brand.id).order('full_name'),
       supabase.from('contacts').select('*').order('nom'),
     ]);
     const team = profilesRes.data || [];
@@ -91,7 +93,12 @@ export default function Administration() {
     setContacts(contactsRes.data || []);
     setSelectedUserId(current => current || team.find(p => p.role !== 'admin' && p.active)?.id || '');
     setLoading(false);
-  }, []);
+  }, [brand.id]);
+
+  useEffect(() => {
+    setIntegrationName(`OpenClaw ${brand.name}`);
+    setGeneratedToken('');
+  }, [brand.name]);
 
   useEffect(() => { loadBaseData(); }, [loadBaseData]);
 
@@ -305,8 +312,8 @@ export default function Administration() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Administration de l'équipe</h1>
-        <p className="mt-1 text-sm text-slate-500">Créez les accès, distribuez les prospects et suivez l'activité individuelle.</p>
+        <h1 className="text-2xl font-bold text-slate-900">Administration · {brand.name}</h1>
+        <p className="mt-1 text-sm text-slate-500">Créez les accès, distribuez les prospects et suivez uniquement l'activité de cet espace.</p>
       </div>
 
       {!multiUserEnabled && (
@@ -337,7 +344,7 @@ export default function Administration() {
           <form onSubmit={createUser} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-blue-50 p-2.5"><UserCog className="h-5 w-5 text-blue-600" /></div>
-              <div><h2 className="font-bold text-slate-900">Nouvel utilisateur</h2><p className="text-xs text-slate-500">Le compte est actif immédiatement.</p></div>
+              <div><h2 className="font-bold text-slate-900">Nouvel utilisateur</h2><p className="text-xs text-slate-500">Accès immédiat à {brand.name}.</p></div>
             </div>
             <input required value={newUser.full_name} onChange={e => setNewUser({ ...newUser, full_name: e.target.value })} placeholder="Nom complet"
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
@@ -508,7 +515,7 @@ export default function Administration() {
                 </select>
               </label>
               <div className="rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-                La clé donne accès aux fonctions CRM, jamais à la clé maître Supabase. Toutes les actions seront journalisées.
+                Cette clé est verrouillée sur <strong>{brand.name}</strong>. Elle ne peut ni lire ni écrire dans un autre espace, même si OpenClaw se trompe.
               </div>
               <button onClick={createIntegration} disabled={saving || !integrationName.trim()}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-2.5 text-sm font-semibold text-white disabled:opacity-40">

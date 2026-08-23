@@ -4,7 +4,8 @@
 
 ```text
 OpenClaw
-   └─ serveur MCP local (identifiants stockés côté OpenClaw)
+   ├─ webfityou-crm (clé limitée à WebFitYou)
+   └─ epiderme-ai-crm (clé limitée à Epiderme AI)
         └─ API CRM Supabase Edge Function
              ├─ validation des données et permissions
              ├─ idempotence anti-doublons
@@ -27,6 +28,7 @@ de SQL arbitraire.
 - Journal immuable dans `agent_audit_logs`.
 - Opération `record_followup` transactionnelle.
 - Aucune suppression de contact exposée aux agents.
+- Chaque clé est rattachée à une seule marque et toutes les requêtes sont filtrées par cette marque.
 - Révocation immédiate depuis l'administration.
 
 ## API
@@ -88,9 +90,10 @@ elle-même strictement ces deux formats.
 ## Connexion à OpenClaw
 
 1. Se connecter au CRM avec le compte administrateur.
-2. Ouvrir **Administration > Intégrations & agents**.
-3. Créer une clé et la copier immédiatement.
-4. Installer et compiler le serveur MCP :
+2. Choisir **WebFitYou** en haut à gauche, puis ouvrir **Administration > Intégrations & agents**.
+3. Créer et copier la clé WebFitYou.
+4. Choisir **Epiderme AI**, puis créer une deuxième clé distincte.
+5. Installer et compiler le serveur MCP :
 
 ```bash
 cd integrations/openclaw-mcp
@@ -98,18 +101,30 @@ npm install
 npm run build
 ```
 
-5. Enregistrer le serveur dans OpenClaw :
+6. Enregistrer les deux serveurs dans OpenClaw :
 
 ```bash
 openclaw mcp add webfityou-crm \
   --command node \
   --arg /CHEMIN/ABSOLU/integrations/openclaw-mcp/dist/index.js \
   --env CRM_API_URL=https://<project-ref>.supabase.co/functions/v1/crm-api \
-  --env CRM_API_KEY=crm_CLE_COPIEE
+  --env CRM_API_KEY=crm_CLE_WEBFITYOU \
+  --env CRM_BRAND_NAME=WebFitYou
 
 openclaw mcp doctor webfityou-crm --probe
 openclaw mcp tools webfityou-crm
+
+openclaw mcp add epiderme-ai-crm \
+  --command node \
+  --arg /CHEMIN/ABSOLU/integrations/openclaw-mcp/dist/index.js \
+  --env CRM_API_URL=https://<project-ref>.supabase.co/functions/v1/crm-api \
+  --env CRM_API_KEY=crm_CLE_EPIDERME \
+  --env "CRM_BRAND_NAME=Epiderme AI"
+
+openclaw mcp doctor epiderme-ai-crm --probe
 ```
+
+OpenClaw doit sélectionner le serveur d'après la marque demandée. La sécurité ne repose toutefois pas sur son interprétation : l'API refuse techniquement tout accès hors de la marque inscrite dans la clé.
 
 ## Méthode recommandée pour l'agent
 
@@ -125,4 +140,3 @@ openclaw mcp tools webfityou-crm
 En cas de doute, cliquer sur **Révoquer** dans l'administration. La clé cesse de
 fonctionner immédiatement. Créer ensuite une nouvelle clé et remplacer uniquement
 `CRM_API_KEY` dans la configuration OpenClaw.
-

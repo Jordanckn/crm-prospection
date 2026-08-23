@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { sendEmailViaGmail } from "../_shared/gmail.ts";
+import { sendEmailViaResend } from "../_shared/resend.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -83,7 +84,7 @@ Deno.serve(async (req: Request) => {
     const now = new Date().toISOString();
     const { data: enrollments, error: enrollError } = await supabase
       .from("email_sequence_enrollments")
-      .select("*, email_sequences(*), contacts(*)")
+      .select("*, email_sequences(*), contacts(*), brands(*)")
       .eq("statut", "active")
       .lte("prochaine_execution", now);
 
@@ -103,11 +104,19 @@ Deno.serve(async (req: Request) => {
       try {
         const sequence = enrollment.email_sequences;
         const contact = enrollment.contacts;
+        const brand = enrollment.brands;
         const etapes: SequenceStep[] = sequence.etapes || [];
         const currentStep = enrollment.etape_courante;
         const baseDelayMin: number = sequence.delai_base_minutes || 3;
         const aleaPct: number = sequence.alea_pourcentage || 30;
         const shouldRewrite: boolean = sequence.rewrite_ia !== false;
+
+        if (contact.email_opted_out_at) {
+          await supabase.from("email_sequence_enrollments")
+            .update({ statut: "cancelled", updated_at: now })
+            .eq("id", enrollment.id);
+          continue;
+        }
 
         if (currentStep >= etapes.length) {
           await supabase
@@ -123,9 +132,10 @@ Deno.serve(async (req: Request) => {
           .from("templates")
           .select("*")
           .eq("id", step.template_id)
+          .eq("brand_id", enrollment.brand_id)
           .maybeSingle();
 
-        if (!template || !contact.email) {
+        if (!template || !contact.email || contact.brand_id !== enrollment.brand_id || !brand) {
           errors++;
           continue;
         }
@@ -150,6 +160,7 @@ Deno.serve(async (req: Request) => {
             .from("app_settings")
             .select("cle, valeur")
             .eq("user_id", contact.assigned_to)
+            .eq("brand_id", enrollment.brand_id)
             .in("cle", ["openrouter_api_key", "ai_model"]);
 
           let openrouterKey = "";
@@ -172,12 +183,20 @@ Deno.serve(async (req: Request) => {
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
 
-        // Send from the connected Google Workspace mailbox.
-        await sendEmailViaGmail({
-          to: contact.email,
-          subject: step.subject || template.objet || template.titre,
-          html,
-        });
+        const subject = step.subject || template.objet || template.titre;
+        if (brand.email_provider === "resend") {
+          await sendEmailViaResend({
+            to: contact.email,
+            subject,
+            html,
+            fromName: brand.from_name,
+            fromEmail: brand.from_email,
+            replyTo: brand.reply_to,
+            unsubscribeEmail: brand.unsubscribe_email,
+          });
+        } else {
+          await sendEmailViaGmail({ to: contact.email, subject, html });
+        }
 
         // Log as interaction
         await supabase.from("interactions").insert([{
@@ -188,6 +207,7 @@ Deno.serve(async (req: Request) => {
           duree: 0,
           resultat: "",
           notes: `[Sequence auto] ${sequence.titre} - Etape ${currentStep + 1}: ${step.subject || template.objet || template.titre}`,
+          brand_id: enrollment.brand_id,
         }]);
 
         await supabase.from("contacts")

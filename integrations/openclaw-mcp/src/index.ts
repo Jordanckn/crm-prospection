@@ -6,6 +6,7 @@ import { z } from "zod";
 
 const apiUrl = (process.env.CRM_API_URL || "").replace(/\/$/, "");
 const apiKey = process.env.CRM_API_KEY || "";
+const brandName = process.env.CRM_BRAND_NAME || "l'espace lie a cette cle";
 
 if (!apiUrl || !apiKey) {
   console.error("CRM_API_URL et CRM_API_KEY sont obligatoires.");
@@ -60,9 +61,11 @@ const contactId = z.string().uuid().describe("Identifiant UUID du contact");
 const dateTime = z.string().datetime({ offset: true }).describe("Date ISO 8601 avec fuseau horaire");
 
 const server = new McpServer(
-  { name: "webfityou-crm", version: "1.0.0" },
+  { name: `crm-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, version: "1.1.0" },
   {
     instructions: [
+      `Cette connexion est exclusivement reservee a ${brandName}. Ne melange jamais ses prospects, templates, actions ou rapports avec une autre marque.`,
+      "La cle API impose aussi cette separation cote serveur.",
       "Utilise ce CRM comme source de vérité pour les prospects et le suivi commercial.",
       "Recherche toujours un contact avant de le créer afin d'éviter les doublons.",
       "Après une conversation commerciale, privilégie crm_record_followup : il enregistre le contact, l'interaction et la prochaine tâche ensemble.",
@@ -212,4 +215,3 @@ process.on("SIGINT", async () => {
   await server.close();
   process.exit(0);
 });
-

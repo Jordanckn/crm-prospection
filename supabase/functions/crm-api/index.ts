@@ -22,6 +22,9 @@ type Actor = {
   defaultUserId: string | null;
   permissions: string[];
   name: string;
+  brandId: string;
+  brandCode: string;
+  brandName: string;
 };
 
 class ApiError extends Error {
@@ -96,7 +99,7 @@ async function authenticate(service: SupabaseClient, req: Request): Promise<Acto
   if (token.startsWith("crm_")) {
     const keyHash = await sha256(token);
     const { data, error } = await service.from("api_clients")
-      .select("id, name, permissions, default_user_id, active, expires_at")
+      .select("id, name, permissions, default_user_id, active, expires_at, brand_id, brands(code, name)")
       .eq("key_hash", keyHash).maybeSingle();
     if (error || !data?.active) throw new ApiError(401, "Clé API invalide ou révoquée.");
     if (data.expires_at && new Date(data.expires_at) <= new Date()) {
@@ -110,13 +113,16 @@ async function authenticate(service: SupabaseClient, req: Request): Promise<Acto
       defaultUserId: data.default_user_id,
       permissions: Array.isArray(data.permissions) ? data.permissions : [],
       name: data.name,
+      brandId: data.brand_id,
+      brandCode: data.brands?.code || "unknown",
+      brandName: data.brands?.name || "Espace CRM",
     };
   }
 
   const { data: { user }, error } = await service.auth.getUser(token);
   if (error || !user) throw new ApiError(401, "Session invalide.");
   const { data: profile, error: profileError } = await service.from("profiles")
-    .select("id, full_name, role, active").eq("id", user.id).maybeSingle();
+    .select("id, full_name, role, active, active_brand_id, brands!profiles_active_brand_id_fkey(code, name)").eq("id", user.id).maybeSingle();
   if (profileError) throw new ApiError(500, "Impossible de vérifier le profil administrateur.", profileError.message);
   if (!profile?.active || profile.role !== "admin") {
     throw new ApiError(403, "Accès réservé aux administrateurs.");
@@ -128,6 +134,9 @@ async function authenticate(service: SupabaseClient, req: Request): Promise<Acto
     defaultUserId: user.id,
     permissions: ["*"],
     name: profile.full_name || user.email || "Administrateur",
+    brandId: profile.active_brand_id,
+    brandCode: profile.brands?.code || "unknown",
+    brandName: profile.brands?.name || "Espace CRM",
   };
 }
 
@@ -137,11 +146,12 @@ function requirePermission(actor: Actor, permission: Permission) {
   }
 }
 
-async function requireActiveUser(service: SupabaseClient, userId: string | null): Promise<string> {
+async function requireActiveUser(service: SupabaseClient, userId: string | null, brandId: string): Promise<string> {
   if (!userId) throw new ApiError(400, "Un utilisateur cible doit être indiqué.");
-  const { data } = await service.from("profiles").select("id").eq("id", userId).eq("active", true).maybeSingle();
+  const { data } = await service.from("profile_brands").select("profile_id, profiles!inner(active)")
+    .eq("profile_id", userId).eq("brand_id", brandId).eq("profiles.active", true).maybeSingle();
   if (!data) throw new ApiError(400, "Utilisateur cible introuvable ou désactivé.");
-  return data.id;
+  return data.profile_id;
 }
 
 async function audit(
@@ -165,6 +175,7 @@ async function audit(
     payload: payload || {},
     result: { status: result.status, success: result.status < 400 },
     ip_address: (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || null,
+    brand_id: actor.brandId,
   });
 }
 
@@ -186,6 +197,7 @@ async function beginIdempotency(
     idempotency_key: key,
     action,
     request_hash: requestHash,
+    brand_id: actor.brandId,
   }).select("id").single();
   if (!error && data) return { recordId: data.id };
   if (error?.code !== "23505") throw error;
@@ -237,20 +249,21 @@ async function route(
 
   if (method === "GET" && !resource) {
     return { action: "api.describe", result: ok({
-      name: "WebFitYou CRM API", version: "1.0.0",
+      name: `${actor.brandName} CRM API`, version: "1.1.0", brand: { id: actor.brandId, code: actor.brandCode, name: actor.brandName },
       capabilities: ["contacts", "interactions", "followups", "tasks", "assignments", "work", "reports", "users", "audit"],
     }) };
   }
 
   if (method === "GET" && resource === "health") {
-    return { action: "api.health", result: ok({ status: "ok", actor: actor.name, time: new Date().toISOString() }) };
+    return { action: "api.health", result: ok({ status: "ok", actor: actor.name, brand: { code: actor.brandCode, name: actor.brandName }, time: new Date().toISOString() }) };
   }
 
   if (resource === "clients") {
     if (actor.kind !== "admin") throw new ApiError(403, "La gestion des clés est réservée à l'administrateur humain.");
     if (method === "GET") {
       const { data, error } = await service.from("api_clients")
-        .select("id, name, key_prefix, permissions, default_user_id, active, last_used_at, expires_at, created_at")
+        .select("id, name, key_prefix, permissions, default_user_id, active, last_used_at, expires_at, created_at, brand_id, brands(code, name)")
+        .eq("brand_id", actor.brandId)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return { action: "clients.list", entityType: "api_client", result: ok(data || []) };
@@ -262,7 +275,7 @@ async function route(
       const permissions = requested.length ? requested : [...ALL_PERMISSIONS];
       const invalid = permissions.filter(permission => !ALL_PERMISSIONS.includes(permission as Permission));
       if (invalid.length) throw new ApiError(400, "Permissions inconnues.", invalid);
-      const defaultUserId = body.default_user_id ? await requireActiveUser(service, asString(body.default_user_id, 60)) : null;
+      const defaultUserId = body.default_user_id ? await requireActiveUser(service, asString(body.default_user_id, 60), actor.brandId) : null;
       const expiresAt = body.expires_at
         ? isoDate(body.expires_at, "expires_at")
         : new Date(Date.now() + 365 * 86_400_000).toISOString();
@@ -276,7 +289,8 @@ async function route(
         default_user_id: defaultUserId,
         expires_at: expiresAt,
         created_by: actor.adminUserId,
-      }).select("id, name, key_prefix, permissions, default_user_id, active, expires_at, created_at").single();
+        brand_id: actor.brandId,
+      }).select("id, name, key_prefix, permissions, default_user_id, active, expires_at, created_at, brand_id").single();
       if (error) throw error;
       return { action: "clients.create", entityType: "api_client", entityId: data.id, result: ok({ ...data, token }, 201) };
     }
@@ -285,9 +299,9 @@ async function route(
       if (typeof body.active === "boolean") updates.active = body.active;
       if (body.name !== undefined) updates.name = asString(body.name, 120);
       if (body.default_user_id !== undefined) {
-        updates.default_user_id = body.default_user_id ? await requireActiveUser(service, asString(body.default_user_id, 60)) : null;
+        updates.default_user_id = body.default_user_id ? await requireActiveUser(service, asString(body.default_user_id, 60), actor.brandId) : null;
       }
-      const { data, error } = await service.from("api_clients").update(updates).eq("id", id)
+      const { data, error } = await service.from("api_clients").update(updates).eq("id", id).eq("brand_id", actor.brandId)
         .select("id, name, key_prefix, permissions, default_user_id, active, last_used_at, expires_at, created_at").single();
       if (error) throw new ApiError(404, "Intégration introuvable.");
       return { action: "clients.update", entityType: "api_client", entityId: id, result: ok(data) };
@@ -297,7 +311,8 @@ async function route(
   if (method === "GET" && resource === "users") {
     requirePermission(actor, "users:read");
     const { data, error } = await service.from("profiles")
-      .select("id, full_name, email, role, active").order("full_name");
+      .select("id, full_name, email, role, active, profile_brands!inner(brand_id)")
+      .eq("profile_brands.brand_id", actor.brandId).order("full_name");
     if (error) throw error;
     return { action: "users.list", entityType: "profile", result: ok(data || []) };
   }
@@ -306,7 +321,7 @@ async function route(
     requirePermission(actor, "contacts:read");
     const page = integer(url.searchParams.get("page"), 1, 1, 100_000);
     const limit = integer(url.searchParams.get("limit"), 50, 1, 200);
-    let query = service.from("contacts").select("*, assigned_user:profiles!contacts_assigned_to_fkey(id, full_name, email)", { count: "exact" });
+    let query = service.from("contacts").select("*, assigned_user:profiles!contacts_assigned_to_fkey(id, full_name, email)", { count: "exact" }).eq("brand_id", actor.brandId);
     const search = cleanSearch(url.searchParams.get("query") || "");
     if (search) query = query.or(`prenom.ilike.%${search}%,nom.ilike.%${search}%,entreprise.ilike.%${search}%,email.ilike.%${search}%,telephone.ilike.%${search}%`);
     const assignedTo = url.searchParams.get("assigned_to");
@@ -321,9 +336,9 @@ async function route(
   if (resource === "contacts" && method === "GET" && id) {
     requirePermission(actor, "contacts:read");
     const [contactRes, interactionRes, taskRes] = await Promise.all([
-      service.from("contacts").select("*, assigned_user:profiles!contacts_assigned_to_fkey(id, full_name, email)").eq("id", id).maybeSingle(),
-      service.from("interactions").select("*").eq("contact_id", id).order("date_heure", { ascending: false }).limit(100),
-      service.from("taches").select("*").eq("contact_id", id).order("date_echeance", { ascending: true }),
+      service.from("contacts").select("*, assigned_user:profiles!contacts_assigned_to_fkey(id, full_name, email)").eq("id", id).eq("brand_id", actor.brandId).maybeSingle(),
+      service.from("interactions").select("*").eq("contact_id", id).eq("brand_id", actor.brandId).order("date_heure", { ascending: false }).limit(100),
+      service.from("taches").select("*").eq("contact_id", id).eq("brand_id", actor.brandId).order("date_echeance", { ascending: true }),
     ]);
     if (!contactRes.data) throw new ApiError(404, "Contact introuvable.");
     return { action: "contacts.get", entityType: "contact", entityId: id, result: ok({ ...contactRes.data, interactions: interactionRes.data || [], tasks: taskRes.data || [] }) };
@@ -331,7 +346,7 @@ async function route(
 
   if (resource === "contacts" && method === "POST" && !id) {
     requirePermission(actor, "contacts:write");
-    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId);
+    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId, actor.brandId);
     const payload = {
       prenom: asString(body.prenom, 120), nom: asString(body.nom, 120), email: asString(body.email, 320),
       telephone: asString(body.telephone, 80), entreprise: asString(body.entreprise, 200),
@@ -340,6 +355,7 @@ async function route(
       adresse: asString(body.adresse, 300), ville: asString(body.ville, 120), code_postal: asString(body.code_postal, 30),
       notes_entreprise: asString(body.notes_entreprise), tags: asStringArray(body.tags, 50),
       site_web: asString(body.site_web, 500), assigned_to: assignedTo, created_by: assignedTo,
+      brand_id: actor.brandId,
     };
     if (!payload.prenom && !payload.nom && !payload.entreprise) throw new ApiError(400, "Indiquez au moins un nom ou une entreprise.");
     const { data, error } = await service.from("contacts").insert(payload).select().single();
@@ -355,9 +371,9 @@ async function route(
     if (body.tags !== undefined) updates.tags = asStringArray(body.tags, 50);
     if (body.assigned_to !== undefined) {
       requirePermission(actor, "assignments:write");
-      updates.assigned_to = await requireActiveUser(service, asString(body.assigned_to, 60));
+      updates.assigned_to = await requireActiveUser(service, asString(body.assigned_to, 60), actor.brandId);
     }
-    const { data, error } = await service.from("contacts").update(updates).eq("id", id).select().single();
+    const { data, error } = await service.from("contacts").update(updates).eq("id", id).eq("brand_id", actor.brandId).select().single();
     if (error) throw new ApiError(404, "Contact introuvable.");
     return { action: "contacts.update", entityType: "contact", entityId: id, result: ok(data) };
   }
@@ -365,15 +381,16 @@ async function route(
   if (resource === "interactions" && method === "POST") {
     requirePermission(actor, "interactions:write");
     const contactId = asString(body.contact_id, 60);
-    const { data: contact } = await service.from("contacts").select("id, assigned_to").eq("id", contactId).maybeSingle();
+    const { data: contact } = await service.from("contacts").select("id, assigned_to").eq("id", contactId).eq("brand_id", actor.brandId).maybeSingle();
     if (!contact) throw new ApiError(404, "Contact introuvable.");
-    const userId = await requireActiveUser(service, asString(body.user_id, 60) || contact.assigned_to || actor.defaultUserId);
+    const userId = await requireActiveUser(service, asString(body.user_id, 60) || contact.assigned_to || actor.defaultUserId, actor.brandId);
     const type = asString(body.type, 30) || "Appel";
     if (!["Appel", "Email", "WhatsApp", "SMS", "Facebook", "Instagram"].includes(type)) throw new ApiError(400, "Type d'interaction invalide.");
     const { data, error } = await service.from("interactions").insert({
       contact_id: contactId, user_id: userId, type,
       date_heure: isoDate(body.date_heure, "date_heure") || new Date().toISOString(),
       duree: Math.max(0, Number(body.duree) || 0), resultat: asString(body.resultat, 80), notes: asString(body.notes),
+      brand_id: actor.brandId,
     }).select().single();
     if (error) throw error;
     return { action: "interactions.create", entityType: "interaction", entityId: data.id, result: ok(data, 201) };
@@ -383,10 +400,11 @@ async function route(
     requirePermission(actor, "contacts:write");
     requirePermission(actor, "interactions:write");
     if (body.task) requirePermission(actor, "tasks:write");
-    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId);
+    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId, actor.brandId);
+    const contactPayload = { ...asObject(body.contact), _brand_id: actor.brandId };
     const { data, error } = await service.rpc("crm_agent_record_followup", {
       p_contact_id: asString(body.contact_id, 60) || null,
-      p_contact: asObject(body.contact),
+      p_contact: contactPayload,
       p_interaction: asObject(body.interaction),
       p_task: body.task ? asObject(body.task) : null,
       p_assigned_to: assignedTo,
@@ -400,17 +418,18 @@ async function route(
     const contactId = asString(body.contact_id, 60) || null;
     let inferredUser: string | null = null;
     if (contactId) {
-      const { data: contact } = await service.from("contacts").select("assigned_to").eq("id", contactId).maybeSingle();
+      const { data: contact } = await service.from("contacts").select("assigned_to").eq("id", contactId).eq("brand_id", actor.brandId).maybeSingle();
       if (!contact) throw new ApiError(404, "Contact introuvable.");
       inferredUser = contact.assigned_to;
     }
-    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || inferredUser || actor.defaultUserId);
+    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || inferredUser || actor.defaultUserId, actor.brandId);
     const title = asString(body.titre, 300);
     if (!title) throw new ApiError(400, "Le titre de la tâche est obligatoire.");
     const { data, error } = await service.from("taches").insert({
       contact_id: contactId, titre: title, description: asString(body.description),
       date_echeance: isoDate(body.date_echeance, "date_echeance"), statut: "En attente",
       assigned_to: assignedTo, created_by: assignedTo,
+      brand_id: actor.brandId,
     }).select().single();
     if (error) throw error;
     return { action: "tasks.create", entityType: "task", entityId: data.id, result: ok(data, 201) };
@@ -418,7 +437,7 @@ async function route(
 
   if (resource === "tasks" && method === "PATCH" && id && parts[2] === "complete") {
     requirePermission(actor, "tasks:write");
-    const { data, error } = await service.from("taches").update({ statut: "Terminé" }).eq("id", id).select().single();
+    const { data, error } = await service.from("taches").update({ statut: "Terminé" }).eq("id", id).eq("brand_id", actor.brandId).select().single();
     if (error) throw new ApiError(404, "Tâche introuvable.");
     return { action: "tasks.complete", entityType: "task", entityId: id, result: ok(data) };
   }
@@ -427,8 +446,10 @@ async function route(
     requirePermission(actor, "assignments:write");
     const contactIds = asStringArray(body.contact_ids, 500);
     if (!contactIds.length) throw new ApiError(400, "Aucun contact à affecter.");
-    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60));
-    const { error } = await service.from("contacts").update({ assigned_to: assignedTo }).in("id", contactIds);
+    const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60), actor.brandId);
+    const { data: scopedContacts } = await service.from("contacts").select("id").in("id", contactIds).eq("brand_id", actor.brandId);
+    if ((scopedContacts || []).length !== contactIds.length) throw new ApiError(400, "Un ou plusieurs contacts n'appartiennent pas a cet espace.");
+    const { error } = await service.from("contacts").update({ assigned_to: assignedTo }).in("id", contactIds).eq("brand_id", actor.brandId);
     if (error) throw error;
     await service.from("taches").update({ assigned_to: assignedTo }).in("contact_id", contactIds).eq("statut", "En attente");
     await service.from("liste_appels").delete().in("contact_id", contactIds).neq("statut", "traite");
@@ -436,7 +457,7 @@ async function route(
     if (body.add_to_call_list !== false) {
       const { data: rows } = await service.from("liste_appels").select("ordre").eq("user_id", assignedTo).order("ordre", { ascending: false }).limit(1);
       let order = (rows?.[0]?.ordre ?? -1) + 1;
-      const calls = contactIds.map(contactId => ({ user_id: assignedTo, contact_id: contactId, ordre: order++, notes_prep: asString(body.call_notes), statut: "en_attente" }));
+      const calls = contactIds.map(contactId => ({ user_id: assignedTo, contact_id: contactId, ordre: order++, notes_prep: asString(body.call_notes), statut: "en_attente", brand_id: actor.brandId }));
       const { error: callError } = await service.from("liste_appels").insert(calls);
       if (callError) throw callError;
       callsCreated = calls.length;
@@ -448,6 +469,7 @@ async function route(
         contact_id: contactId, titre: asString(task.titre, 300), description: asString(task.description),
         date_echeance: isoDate(task.date_echeance, "task.date_echeance"), statut: "En attente",
         assigned_to: assignedTo, created_by: assignedTo,
+        brand_id: actor.brandId,
       }));
       const { error: taskError } = await service.from("taches").insert(tasks);
       if (taskError) throw taskError;
@@ -458,28 +480,28 @@ async function route(
 
   if (resource === "work" && method === "GET") {
     requirePermission(actor, "work:read");
-    const userId = await requireActiveUser(service, url.searchParams.get("user_id") || actor.defaultUserId);
+    const userId = await requireActiveUser(service, url.searchParams.get("user_id") || actor.defaultUserId, actor.brandId);
     const from = isoDate(url.searchParams.get("from") || new Date().toISOString().slice(0, 10), "from", false)!;
     const defaultTo = new Date(new Date(from).getTime() + 7 * 86_400_000).toISOString();
     const to = isoDate(url.searchParams.get("to") || defaultTo, "to", false)!;
     const [tasks, relances, calls] = await Promise.all([
-      service.from("taches").select("*, contacts(id, prenom, nom, entreprise, telephone, email)").eq("assigned_to", userId).eq("statut", "En attente").gte("date_echeance", from).lte("date_echeance", to).order("date_echeance"),
-      service.from("relances").select("*, contacts!inner(id, prenom, nom, entreprise, telephone, email, assigned_to)").eq("contacts.assigned_to", userId).eq("statut", "en_attente").gte("date_relance", from.slice(0, 10)).lte("date_relance", to.slice(0, 10)).order("date_relance"),
-      service.from("liste_appels").select("*, contacts(id, prenom, nom, entreprise, telephone, email)").eq("user_id", userId).neq("statut", "traite").order("ordre"),
+      service.from("taches").select("*, contacts(id, prenom, nom, entreprise, telephone, email)").eq("assigned_to", userId).eq("brand_id", actor.brandId).eq("statut", "En attente").gte("date_echeance", from).lte("date_echeance", to).order("date_echeance"),
+      service.from("relances").select("*, contacts!inner(id, prenom, nom, entreprise, telephone, email, assigned_to)").eq("contacts.assigned_to", userId).eq("brand_id", actor.brandId).eq("statut", "en_attente").gte("date_relance", from.slice(0, 10)).lte("date_relance", to.slice(0, 10)).order("date_relance"),
+      service.from("liste_appels").select("*, contacts(id, prenom, nom, entreprise, telephone, email)").eq("user_id", userId).eq("brand_id", actor.brandId).neq("statut", "traite").order("ordre"),
     ]);
     return { action: "work.get", entityType: "profile", entityId: userId, result: ok({ user_id: userId, from, to, tasks: tasks.data || [], followups: relances.data || [], call_list: calls.data || [] }) };
   }
 
   if (resource === "reports" && method === "GET") {
     requirePermission(actor, "reports:read");
-    const userId = await requireActiveUser(service, url.searchParams.get("user_id") || actor.defaultUserId);
+    const userId = await requireActiveUser(service, url.searchParams.get("user_id") || actor.defaultUserId, actor.brandId);
     const from = isoDate(url.searchParams.get("from") || new Date().toISOString().slice(0, 10), "from", false)!;
     const to = isoDate(url.searchParams.get("to") || new Date().toISOString(), "to", false)!;
     const [contacts, interactions, tasks, sessions] = await Promise.all([
-      service.from("contacts").select("id, statut").eq("assigned_to", userId),
-      service.from("interactions").select("type, resultat, duree").eq("user_id", userId).gte("date_heure", from).lte("date_heure", to),
-      service.from("taches").select("statut, updated_at").eq("assigned_to", userId).gte("updated_at", from).lte("updated_at", to),
-      service.from("sessions_travail").select("duree_minutes, debut, fin").eq("user_id", userId).gte("debut", from).lte("debut", to),
+      service.from("contacts").select("id, statut").eq("assigned_to", userId).eq("brand_id", actor.brandId),
+      service.from("interactions").select("type, resultat, duree").eq("user_id", userId).eq("brand_id", actor.brandId).gte("date_heure", from).lte("date_heure", to),
+      service.from("taches").select("statut, updated_at").eq("assigned_to", userId).eq("brand_id", actor.brandId).gte("updated_at", from).lte("updated_at", to),
+      service.from("sessions_travail").select("duree_minutes, debut, fin").eq("user_id", userId).eq("brand_id", actor.brandId).gte("debut", from).lte("debut", to),
     ]);
     const activity = interactions.data || [];
     const taskRows = tasks.data || [];
@@ -505,6 +527,7 @@ async function route(
     requirePermission(actor, "audit:read");
     const limit = integer(url.searchParams.get("limit"), 50, 1, 200);
     let query = service.from("agent_audit_logs").select("id, request_id, client_id, admin_user_id, action, entity_type, entity_id, result, created_at");
+    query = query.eq("brand_id", actor.brandId);
     if (url.searchParams.get("client_id")) query = query.eq("client_id", url.searchParams.get("client_id"));
     const { data, error } = await query.order("created_at", { ascending: false }).limit(limit);
     if (error) throw error;

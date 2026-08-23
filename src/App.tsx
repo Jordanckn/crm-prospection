@@ -16,6 +16,7 @@ import Administration from './pages/Administration';
 import { supabase } from './lib/supabase';
 import type { Contact, Profile } from './types/database';
 import { PermissionsProvider } from './contexts/PermissionsContext';
+import { BrandProvider } from './contexts/BrandContext';
 
 type SessionUser = {
   id: string;
@@ -33,6 +34,7 @@ const legacyProfile = (user: SessionUser): Profile => {
     role: email.toLowerCase() === 'contact@webfityou.com' ? 'admin' : 'contributor',
     active: true,
     manager_id: null,
+    active_brand_id: '11111111-1111-4111-8111-111111111111',
     created_at: now,
     updated_at: now,
   };
@@ -168,9 +170,11 @@ function App() {
 
   return (
     <PermissionsProvider profile={profile}>
-      <Layout currentPage={currentPage} onNavigate={handleNavigate} profile={profile}>
-        {renderPage()}
-      </Layout>
+      <BrandProvider profile={profile}>
+        <Layout currentPage={currentPage} onNavigate={handleNavigate} profile={profile}>
+          {renderPage()}
+        </Layout>
+      </BrandProvider>
     </PermissionsProvider>
   );
 }

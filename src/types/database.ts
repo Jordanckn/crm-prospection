@@ -15,6 +15,7 @@ export type PageSpeedDetails = {
 
 export type Contact = {
   id: string;
+  brand_id?: string;
   prenom: string;
   nom: string;
   email: string;
@@ -45,6 +46,8 @@ export type Contact = {
   updated_at: string;
   assigned_to: string;
   created_by: string | null;
+  email_opted_out_at?: string | null;
+  email_opt_out_reason?: string;
 };
 
 export type Interaction = {
@@ -91,8 +94,22 @@ export type Profile = {
   role: UserRole;
   active: boolean;
   manager_id: string | null;
+  active_brand_id: string;
   created_at: string;
   updated_at: string;
+};
+
+export type Brand = {
+  id: string;
+  code: 'webfityou' | 'epiderme_ai' | string;
+  name: string;
+  logo_url: string;
+  accent_color: string;
+  email_provider: 'gmail' | 'resend';
+  from_name: string;
+  from_email: string;
+  reply_to: string | null;
+  unsubscribe_email: string | null;
 };
 
 export type Template = {
