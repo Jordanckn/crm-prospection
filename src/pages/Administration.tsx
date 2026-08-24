@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, BarChart2, CheckCircle2, Clock, Mail, Phone, Plus, Search,
   ShieldCheck, Target, UserCheck, UserCog, Users, KeyRound, Copy, Plug, History,
-  Pencil, Trash2, X,
+  Pencil, Trash2, X, ScanSearch, RefreshCw, Eye,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Profile, Tache } from '../types/database';
@@ -10,7 +10,7 @@ import { roleLabel } from '../contexts/PermissionsContext';
 import { useBrand } from '../contexts/BrandContext';
 
 type Period = 'day' | 'week' | 'month';
-type AdminTab = 'equipe' | 'affectations' | 'pilotage' | 'integrations';
+type AdminTab = 'equipe' | 'affectations' | 'doublons' | 'pilotage' | 'integrations';
 const multiUserEnabled = import.meta.env.VITE_MULTI_USER_ENABLED === 'true';
 
 type ApiClient = {
@@ -34,6 +34,45 @@ type AgentAuditLog = {
   created_at: string;
 };
 
+type AdminTimeSession = {
+  id: string;
+  user_id: string;
+  debut: string;
+  fin: string | null;
+  duree_minutes: number | null;
+  type_session: 'travail' | 'prospection';
+  notes: string;
+};
+
+type TeamUserKpi = {
+  userId: string;
+  contacts: number;
+  appels: number;
+  messages: number;
+  taches: number;
+  terminees: number;
+  minutes: number;
+  travailMinutes: number;
+  prospectionMinutes: number;
+  activeNow: boolean;
+  lastStart: string | null;
+};
+
+type DuplicateMatch = {
+  match_type: 'entreprise' | 'siren_siret' | 'telephone' | 'site_web' | 'email';
+  match_value: string;
+  contact_ids: string[];
+  contact_count: number;
+};
+
+type DuplicateGroup = {
+  key: string;
+  criteria: Array<{ type: DuplicateMatch['match_type']; value: string }>;
+  contacts: Contact[];
+};
+
+const minutesLabel = (minutes: number) => `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`;
+
 function periodStart(period: Period) {
   const date = new Date();
   if (period === 'day') date.setHours(0, 0, 0, 0);
@@ -49,7 +88,7 @@ function periodStart(period: Period) {
   return date.toISOString();
 }
 
-export default function Administration() {
+export default function Administration({ onOpenContact }: { onOpenContact: (id: string) => void }) {
   const { brand } = useBrand();
   const [tab, setTab] = useState<AdminTab>('equipe');
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -62,6 +101,10 @@ export default function Administration() {
   const [message, setMessage] = useState('');
   const [period, setPeriod] = useState<Period>('week');
   const [stats, setStats] = useState({ contacts: 0, appels: 0, messages: 0, taches: 0, terminees: 0, minutes: 0 });
+  const [teamKpis, setTeamKpis] = useState<TeamUserKpi[]>([]);
+  const [recentSessions, setRecentSessions] = useState<AdminTimeSession[]>([]);
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
   const [newUser, setNewUser] = useState({ full_name: '', email: '', password: '', role: 'contributor' as Profile['role'] });
   const [editingUser, setEditingUser] = useState<Profile | null>(null);
   const [editUserForm, setEditUserForm] = useState({ full_name: '', email: '', password: '', role: 'contributor' as Profile['role'], active: true });
@@ -106,32 +149,55 @@ export default function Administration() {
   useEffect(() => { loadBaseData(); }, [loadBaseData]);
 
   const loadStats = useCallback(async () => {
-    if (!selectedUserId) return;
     const from = periodStart(period);
     const [contactRes, interactionRes, taskRes, sessionRes] = await Promise.all([
-      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('assigned_to', selectedUserId),
-      supabase.from('interactions').select('type').eq('user_id', selectedUserId).gte('date_heure', from),
-      supabase.from('taches').select('statut').eq('assigned_to', selectedUserId).gte('updated_at', from),
-      supabase.from('sessions_travail').select('duree_minutes, debut, fin').eq('user_id', selectedUserId).gte('debut', from),
+      supabase.from('contacts').select('id, assigned_to'),
+      supabase.from('interactions').select('user_id, type').gte('date_heure', from),
+      supabase.from('taches').select('assigned_to, statut').gte('updated_at', from),
+      supabase.from('sessions_travail').select('id, user_id, debut, fin, duree_minutes, type_session, notes').gte('debut', from).order('debut', { ascending: false }),
     ]);
+    const contacts = contactRes.data || [];
     const interactions = interactionRes.data || [];
     const tasks = taskRes.data || [];
-    const sessions = sessionRes.data || [];
-    setStats({
-      contacts: contactRes.count || 0,
-      appels: interactions.filter(i => i.type === 'Appel').length,
-      messages: interactions.filter(i => i.type !== 'Appel').length,
-      taches: tasks.length,
-      terminees: tasks.filter(t => t.statut === 'Terminé').length,
-      minutes: sessions.reduce((sum, s) => {
-        if (s.duree_minutes) return sum + s.duree_minutes;
-        if (s.fin) return sum + Math.max(0, Math.round((new Date(s.fin).getTime() - new Date(s.debut).getTime()) / 60000));
-        return sum;
-      }, 0),
+    const sessions = (sessionRes.data || []) as AdminTimeSession[];
+    const sessionMinutes = (session: AdminTimeSession) => {
+      if (session.duree_minutes !== null) return Math.max(0, session.duree_minutes);
+      const end = session.fin ? new Date(session.fin).getTime() : Date.now();
+      return Math.max(0, Math.round((end - new Date(session.debut).getTime()) / 60000));
+    };
+    const kpis = profiles.map(profile => {
+      const userSessions = sessions.filter(session => session.user_id === profile.id);
+      const userInteractions = interactions.filter(item => item.user_id === profile.id);
+      const userTasks = tasks.filter(task => task.assigned_to === profile.id);
+      return {
+        userId: profile.id,
+        contacts: contacts.filter(contact => contact.assigned_to === profile.id).length,
+        appels: userInteractions.filter(item => item.type === 'Appel').length,
+        messages: userInteractions.filter(item => item.type !== 'Appel').length,
+        taches: userTasks.length,
+        terminees: userTasks.filter(task => task.statut === 'Terminé').length,
+        minutes: userSessions.reduce((sum, session) => sum + sessionMinutes(session), 0),
+        travailMinutes: userSessions.filter(session => session.type_session !== 'prospection').reduce((sum, session) => sum + sessionMinutes(session), 0),
+        prospectionMinutes: userSessions.filter(session => session.type_session === 'prospection').reduce((sum, session) => sum + sessionMinutes(session), 0),
+        activeNow: userSessions.some(session => !session.fin),
+        lastStart: userSessions[0]?.debut || null,
+      };
     });
-  }, [period, selectedUserId]);
+    setTeamKpis(kpis);
+    setRecentSessions(sessions.slice(0, 100));
+    const selected = kpis.find(kpi => kpi.userId === selectedUserId);
+    setStats(selected || { contacts: 0, appels: 0, messages: 0, taches: 0, terminees: 0, minutes: 0 });
+  }, [period, profiles, selectedUserId]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
+
+  const teamTotals = useMemo(() => teamKpis.reduce((totals, user) => ({
+    contacts: totals.contacts + user.contacts,
+    interactions: totals.interactions + user.appels + user.messages,
+    terminees: totals.terminees + user.terminees,
+    minutes: totals.minutes + user.minutes,
+    activeNow: totals.activeNow + (user.activeNow ? 1 : 0),
+  }), { contacts: 0, interactions: 0, terminees: 0, minutes: 0, activeNow: 0 }), [teamKpis]);
 
   const crmApiRequest = useCallback(async (path: string, method = 'GET', body?: Record<string, unknown>) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -172,6 +238,56 @@ export default function Administration() {
   useEffect(() => {
     if (tab === 'integrations') void loadIntegrations();
   }, [tab, loadIntegrations]);
+
+  const loadDuplicates = useCallback(async () => {
+    setDuplicatesLoading(true);
+    setMessage('');
+    try {
+      const { data: matches, error } = await supabase.rpc('admin_find_contact_duplicates');
+      if (error) throw error;
+      const rows = (matches || []) as DuplicateMatch[];
+      const ids = [...new Set(rows.flatMap(row => row.contact_ids))];
+      const { data: duplicateContacts, error: contactError } = ids.length
+        ? await supabase.from('contacts').select('*').in('id', ids)
+        : { data: [], error: null };
+      if (contactError) throw contactError;
+      const contactsById = new Map((duplicateContacts || []).map(contact => [contact.id, contact as Contact]));
+      const grouped = new Map<string, DuplicateGroup>();
+      for (const row of rows) {
+        const sortedIds = [...row.contact_ids].sort();
+        const key = sortedIds.join('|');
+        const existing = grouped.get(key) || {
+          key,
+          criteria: [],
+          contacts: sortedIds.map(id => contactsById.get(id)).filter(Boolean) as Contact[],
+        };
+        existing.criteria.push({ type: row.match_type, value: row.match_value });
+        grouped.set(key, existing);
+      }
+      setDuplicateGroups([...grouped.values()].sort((a, b) => b.criteria.length - a.criteria.length || b.contacts.length - a.contacts.length));
+    } catch (error) {
+      setMessage(`Erreur : ${error instanceof Error ? error.message : 'Analyse des doublons impossible.'}`);
+    } finally {
+      setDuplicatesLoading(false);
+    }
+  }, [brand.id]);
+
+  useEffect(() => {
+    if (tab === 'doublons') void loadDuplicates();
+  }, [tab, loadDuplicates]);
+
+  const deleteDuplicateContact = async (contact: Contact) => {
+    if (!confirm(`Supprimer définitivement ${contact.entreprise || `${contact.prenom} ${contact.nom}`} ?\n\nSes interactions, tâches et documents associés pourront également être supprimés. Vérifiez d'abord la fiche à conserver.`)) return;
+    setSaving(true);
+    setMessage('');
+    const { error } = await supabase.from('contacts').delete().eq('id', contact.id);
+    if (error) setMessage(`Erreur : ${error.message}`);
+    else {
+      setMessage('Contact supprimé. L’analyse des doublons a été actualisée.');
+      await Promise.all([loadBaseData(), loadDuplicates()]);
+    }
+    setSaving(false);
+  };
 
   const createIntegration = async () => {
     if (!integrationName.trim()) return;
@@ -388,10 +504,11 @@ export default function Administration() {
 
       {message && <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{message}</div>}
 
-      <div className="flex gap-2 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
         {([
           ['equipe', 'Utilisateurs', Users],
           ['affectations', 'Affectations', Target],
+          ['doublons', 'Doublons', ScanSearch],
           ['pilotage', 'Rapports individuels', BarChart2],
           ['integrations', 'Intégrations & agents', Plug],
         ] as const).map(([id, label, Icon]) => (
@@ -516,11 +633,101 @@ export default function Administration() {
         </div>
       )}
 
+      {tab === 'doublons' && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div>
+              <div className="flex items-center gap-2"><ScanSearch className="h-5 w-5 text-violet-600" /><h2 className="font-bold text-slate-900">Détection des doublons · {brand.name}</h2></div>
+              <p className="mt-1 text-sm text-slate-500">Comparaison par entreprise, SIREN/SIRET, téléphone, site internet et email.</p>
+            </div>
+            <button onClick={() => void loadDuplicates()} disabled={duplicatesLoading}
+              className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50">
+              <RefreshCw className={`h-4 w-4 ${duplicatesLoading ? 'animate-spin' : ''}`} />Relancer l’analyse
+            </button>
+          </div>
+
+          {!duplicatesLoading && !duplicateGroups.length && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center">
+              <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500" />
+              <h3 className="mt-3 font-bold text-emerald-900">Aucun doublon détecté</h3>
+              <p className="mt-1 text-sm text-emerald-700">Aucune valeur identique n’a été trouvée dans les critères analysés.</p>
+            </div>
+          )}
+
+          {duplicatesLoading && <div className="flex h-48 items-center justify-center"><div className="h-9 w-9 animate-spin rounded-full border-4 border-violet-600 border-t-transparent" /></div>}
+
+          {!duplicatesLoading && duplicateGroups.map((group, index) => (
+            <div key={group.key} className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-100 bg-amber-50 px-5 py-4">
+                <div>
+                  <h3 className="font-bold text-amber-950">Groupe potentiel #{index + 1} · {group.contacts.length} contacts</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {group.criteria.map(criterion => (
+                      <span key={`${criterion.type}-${criterion.value}`} className="rounded-full border border-amber-200 bg-white px-2.5 py-1 text-xs font-semibold text-amber-800">
+                        {{ entreprise: 'Entreprise', siren_siret: 'SIREN/SIRET', telephone: 'Téléphone', site_web: 'Site web', email: 'Email' }[criterion.type]} : {criterion.value}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <span className="rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900">{group.criteria.length} critère(s) commun(s)</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {group.contacts.map(contact => (
+                  <div key={contact.id} className="flex flex-wrap items-center gap-4 px-5 py-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 font-bold text-slate-600">{(contact.entreprise || contact.nom || '?').slice(0, 1).toUpperCase()}</div>
+                    <div className="min-w-[220px] flex-1">
+                      <p className="font-semibold text-slate-900">{contact.entreprise || `${contact.prenom} ${contact.nom}`}</p>
+                      <p className="text-xs text-slate-500">{[contact.prenom, contact.nom].filter(Boolean).join(' ') || 'Aucun nom de personne'} · Créé le {new Date(contact.created_at).toLocaleDateString('fr-FR')}</p>
+                    </div>
+                    <div className="min-w-[260px] text-xs leading-5 text-slate-600">
+                      <p><strong>Email :</strong> {contact.email || '—'}</p>
+                      <p><strong>Téléphone :</strong> {contact.telephone || '—'}</p>
+                      <p><strong>SIREN/SIRET :</strong> {contact.siren_siret || '—'}</p>
+                      <p><strong>Site :</strong> {contact.site_web || '—'}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => onOpenContact(contact.id)} className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                        <Eye className="h-3.5 w-3.5" />Examiner
+                      </button>
+                      <button onClick={() => deleteDuplicateContact(contact)} disabled={saving}
+                        className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                        <Trash2 className="h-3.5 w-3.5" />Supprimer
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {tab === 'pilotage' && (
         <div className="space-y-5">
+          <div>
+            <div className="mb-3 flex items-end justify-between">
+              <div><h2 className="text-lg font-bold text-slate-900">Vue globale de l’équipe</h2><p className="text-xs text-slate-500">KPI cumulés sur la période sélectionnée</p></div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              {[
+                [Clock, 'Temps total', minutesLabel(teamTotals.minutes), 'bg-blue-50 text-blue-600'],
+                [Activity, 'En pointage', teamTotals.activeNow, 'bg-emerald-50 text-emerald-600'],
+                [Users, 'Prospects', teamTotals.contacts, 'bg-violet-50 text-violet-600'],
+                [Phone, 'Interactions', teamTotals.interactions, 'bg-amber-50 text-amber-600'],
+                [CheckCircle2, 'Tâches terminées', teamTotals.terminees, 'bg-green-50 text-green-600'],
+              ].map(([Icon, label, value, color]) => {
+                const CardIcon = Icon as typeof Users;
+                return <div key={String(label)} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className={`mb-3 inline-flex rounded-xl p-2 ${String(color)}`}><CardIcon className="h-4 w-4" /></div>
+                  <p className="text-2xl font-bold text-slate-900">{String(value)}</p><p className="text-xs text-slate-500">{String(label)}</p>
+                </div>;
+              })}
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)} className="min-w-[240px] rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
-              {commercialProfiles.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+              {profiles.filter(profile => profile.active).map(p => <option key={p.id} value={p.id}>{p.full_name || p.email}</option>)}
             </select>
             <div className="flex rounded-xl bg-slate-100 p-1">
               {([['day', "Aujourd'hui"], ['week', 'Semaine'], ['month', 'Mois']] as const).map(([id, label]) => (
@@ -550,6 +757,57 @@ export default function Administration() {
               {selectedProfile?.full_name || 'Cet utilisateur'} a réalisé <strong>{stats.appels + stats.messages} interactions</strong> et terminé <strong>{stats.terminees} tâche(s)</strong> sur la période.
               Son portefeuille contient actuellement <strong>{stats.contacts} prospect(s)</strong>.
             </p>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="font-bold text-slate-900">KPI par utilisateur</h2>
+              <p className="text-xs text-slate-500">Travail, prospection et activité commerciale sur la période</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr><th className="px-5 py-3">Utilisateur</th><th className="px-4 py-3">État</th><th className="px-4 py-3">Travail</th><th className="px-4 py-3">Prospection</th><th className="px-4 py-3">Interactions</th><th className="px-4 py-3">Tâches</th><th className="px-4 py-3">Dernier pointage</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {teamKpis.map(kpi => {
+                    const profile = profiles.find(item => item.id === kpi.userId);
+                    return <tr key={kpi.userId} className="hover:bg-slate-50">
+                      <td className="px-5 py-3"><p className="font-semibold text-slate-900">{profile?.full_name || profile?.email}</p><p className="text-xs text-slate-400">{profile ? roleLabel(profile.role) : ''}</p></td>
+                      <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kpi.activeNow ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{kpi.activeNow ? 'En cours' : 'Hors pointage'}</span></td>
+                      <td className="px-4 py-3 font-semibold text-blue-700">{minutesLabel(kpi.travailMinutes)}</td>
+                      <td className="px-4 py-3 font-semibold text-emerald-700">{minutesLabel(kpi.prospectionMinutes)}</td>
+                      <td className="px-4 py-3 text-slate-700">{kpi.appels + kpi.messages}</td>
+                      <td className="px-4 py-3 text-slate-700">{kpi.terminees}/{kpi.taches}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{kpi.lastStart ? new Date(kpi.lastStart).toLocaleString('fr-FR') : 'Aucun'}</td>
+                    </tr>;
+                  })}
+                  {!teamKpis.length && <tr><td colSpan={7} className="px-5 py-8 text-center text-slate-500">Aucune activité sur cette période.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="font-bold text-slate-900">Historique des pointages</h2>
+              <p className="text-xs text-slate-500">Qui a pointé, à quelle heure et pendant combien de temps</p>
+            </div>
+            <div className="max-h-[430px] divide-y divide-slate-100 overflow-y-auto">
+              {recentSessions.map(session => {
+                const profile = profiles.find(item => item.id === session.user_id);
+                const duration = session.duree_minutes ?? Math.max(0, Math.round(((session.fin ? new Date(session.fin).getTime() : Date.now()) - new Date(session.debut).getTime()) / 60000));
+                return <div key={session.id} className="flex flex-wrap items-center gap-4 px-5 py-3 text-sm">
+                  <div className={`h-2.5 w-2.5 rounded-full ${session.fin ? 'bg-slate-300' : 'animate-pulse bg-emerald-500'}`} />
+                  <div className="min-w-[180px] flex-1"><p className="font-semibold text-slate-900">{profile?.full_name || profile?.email || 'Utilisateur supprimé'}</p><p className="text-xs text-slate-400">{session.notes || (session.type_session === 'prospection' ? 'Prospection' : 'Travail effectif')}</p></div>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${session.type_session === 'prospection' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>{session.type_session === 'prospection' ? 'Prospection' : 'Travail'}</span>
+                  <span className="min-w-[150px] text-xs text-slate-600">Début : {new Date(session.debut).toLocaleString('fr-FR')}</span>
+                  <span className="min-w-[110px] text-xs text-slate-500">Fin : {session.fin ? new Date(session.fin).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : 'En cours'}</span>
+                  <span className="min-w-[70px] text-right font-bold text-slate-800">{minutesLabel(duration)}</span>
+                </div>;
+              })}
+              {!recentSessions.length && <p className="p-8 text-center text-sm text-slate-500">Aucun pointage sur cette période.</p>}
+            </div>
           </div>
         </div>
       )}

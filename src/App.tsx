@@ -150,7 +150,7 @@ function App() {
       case 'programmation-appels':
         return <ProgrammationAppels onOpenContact={navigateToContact} />;
       case 'administration':
-        return profile?.role === 'admin' ? <Administration /> : <Dashboard />;
+        return profile?.role === 'admin' ? <Administration onOpenContact={navigateToContact} /> : <Dashboard />;
       default:
         return <Dashboard />;
     }

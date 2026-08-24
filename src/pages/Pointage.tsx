@@ -60,7 +60,7 @@ function pct(part: number, total: number): number {
 }
 
 export default function Pointage() {
-  const { canModify, canDelete } = usePermissions();
+  const { canDelete } = usePermissions();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +117,7 @@ export default function Pointage() {
       .reduce((sum, s) => sum + (s.duree_minutes || 0), 0);
     await supabase.from('recaps_journaliers').upsert(
       { user_id: userId, jour: date, minutes_travail, minutes_prospection },
-      { onConflict: 'user_id,jour' }
+      { onConflict: 'brand_id,user_id,jour' }
     );
   };
 
@@ -291,8 +291,7 @@ export default function Pointage() {
           </p>
         )}
 
-        {!canModify && <p className="mt-4 text-center text-sm text-slate-500">Votre accès permet la consultation du pointage, sans modification.</p>}
-        {canModify && <div className="flex items-center justify-center gap-4 mt-4">
+        <div className="flex items-center justify-center gap-4 mt-4">
           {!activeSession ? (
             <button
               onClick={startSession}
@@ -314,7 +313,7 @@ export default function Pointage() {
               Terminer la session
             </button>
           )}
-        </div>}
+        </div>
       </div>
 
       {/* Stats aujourd'hui */}
@@ -554,13 +553,13 @@ export default function Pointage() {
                           )}
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          {canModify && <button
+                          <button
                             onClick={() => { setEditId(session.id); setEditNotes(session.notes || ''); }}
                             className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                             title="Modifier la note"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
-                          </button>}
+                          </button>
                           {canDelete && <button
                             onClick={() => deleteSession(session.id)}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
