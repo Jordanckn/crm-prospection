@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, BarChart2, CheckCircle2, Clock, Mail, Phone, Plus, Search,
   ShieldCheck, Target, UserCheck, UserCog, Users, KeyRound, Copy, Plug, History,
+  Pencil, Trash2, X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Profile, Tache } from '../types/database';
@@ -62,6 +63,8 @@ export default function Administration() {
   const [period, setPeriod] = useState<Period>('week');
   const [stats, setStats] = useState({ contacts: 0, appels: 0, messages: 0, taches: 0, terminees: 0, minutes: 0 });
   const [newUser, setNewUser] = useState({ full_name: '', email: '', password: '', role: 'contributor' as Profile['role'] });
+  const [editingUser, setEditingUser] = useState<Profile | null>(null);
+  const [editUserForm, setEditUserForm] = useState({ full_name: '', email: '', password: '', role: 'contributor' as Profile['role'], active: true });
   const [apiClients, setApiClients] = useState<ApiClient[]>([]);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [integrationName, setIntegrationName] = useState('OpenClaw CRM');
@@ -220,27 +223,87 @@ export default function Administration() {
     }
     setSaving(true);
     setMessage('');
-    const { error } = await supabase.functions.invoke('admin-users', { body: newUser });
-    if (error) setMessage(`Erreur : ${error.message}`);
-    else {
+    try {
+      await adminUserRequest('POST', newUser);
       setMessage('Utilisateur créé. Il peut maintenant se connecter au CRM.');
       setNewUser({ full_name: '', email: '', password: '', role: 'contributor' });
       await loadBaseData();
+    } catch (error) {
+      setMessage(`Erreur : ${error instanceof Error ? error.message : 'Création impossible.'}`);
     }
     setSaving(false);
   };
 
-  const updateProfile = async (profile: Profile, changes: Partial<Profile>) => {
-    if (profile.id === (await supabase.auth.getUser()).data.user?.id && (changes.active === false || (changes.role && changes.role !== 'admin'))) {
-      setMessage("Vous ne pouvez pas désactiver votre propre compte administrateur.");
-      return;
-    }
+  const adminUserRequest = async (method: 'POST' | 'PATCH' | 'DELETE', body: Record<string, unknown>) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Session administrateur expirée.');
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: String(import.meta.env.VITE_SUPABASE_ANON_KEY || ''),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Opération impossible.');
+    return payload;
+  };
+
+  const openUserEditor = (profile: Profile) => {
+    setEditingUser(profile);
+    setEditUserForm({
+      full_name: profile.full_name,
+      email: profile.email,
+      password: '',
+      role: profile.role,
+      active: profile.active,
+    });
+    setMessage('');
+  };
+
+  const saveEditedUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingUser) return;
     setSaving(true);
     setMessage('');
-    const { error } = await supabase.functions.invoke('admin-users', { body: { id: profile.id, ...changes }, method: 'PATCH' });
-    setMessage(error ? `Erreur : ${error.message}` : `Droits de ${profile.full_name || profile.email} mis à jour.`);
-    await loadBaseData();
-    setSaving(false);
+    try {
+      await adminUserRequest('PATCH', {
+        id: editingUser.id,
+        full_name: editUserForm.full_name,
+        email: editUserForm.email,
+        role: editUserForm.role,
+        active: editUserForm.active,
+        ...(editUserForm.password ? { password: editUserForm.password } : {}),
+      });
+      setMessage(`Informations de ${editUserForm.full_name} mises à jour.`);
+      setEditingUser(null);
+      await loadBaseData();
+    } catch (error) {
+      setMessage(`Erreur : ${error instanceof Error ? error.message : 'Modification impossible.'}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteUser = async (profile: Profile) => {
+    if (!confirm(`Supprimer ${profile.full_name || profile.email} de ${brand.name} ?\n\nSes prospects, interactions et tâches seront transférés à votre compte administrateur. Cette action ne peut pas être annulée.`)) return;
+    setSaving(true);
+    setMessage('');
+    try {
+      const result = await adminUserRequest('DELETE', { id: profile.id });
+      setMessage(result.deleted
+        ? `Le compte de ${profile.full_name || profile.email} a été supprimé et son activité vous a été transférée.`
+        : `${profile.full_name || profile.email} a été retiré de ${brand.name}. Ses autres accès ont été conservés.`);
+      if (selectedUserId === profile.id) setSelectedUserId('');
+      setEditingUser(null);
+      await loadBaseData();
+    } catch (error) {
+      setMessage(`Erreur : ${error instanceof Error ? error.message : 'Suppression impossible.'}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleContact = (id: string) => {
@@ -380,18 +443,19 @@ export default function Administration() {
                     <p className="text-xs text-slate-500">{profile.email}</p>
                     <p className="mt-0.5 text-[11px] font-medium text-blue-600">{roleLabel(profile.role)}</p>
                   </div>
-                  <select value={profile.role} onChange={e => updateProfile(profile, { role: e.target.value as Profile['role'] })}
-                    disabled={saving || profile.email.toLowerCase() === 'contact@webfityou.com'}
-                    className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs disabled:cursor-not-allowed disabled:bg-slate-100">
-                    <option value="contributor">Lecture + ajout</option>
-                    <option value="editor">Lecture + ajout + modification</option>
-                    <option value="admin">Administrateur</option>
-                  </select>
-                  <button onClick={() => updateProfile(profile, { active: !profile.active })}
-                    disabled={saving || profile.email.toLowerCase() === 'contact@webfityou.com'}
-                    className={`rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${profile.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                  <span className={`rounded-lg px-3 py-2 text-xs font-semibold ${profile.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                     {profile.active ? 'Actif' : 'Désactivé'}
+                  </span>
+                  <button onClick={() => openUserEditor(profile)} disabled={saving}
+                    className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                    <Pencil className="h-3.5 w-3.5" />Modifier
                   </button>
+                  {profile.email.toLowerCase() !== 'contact@webfityou.com' && (
+                    <button onClick={() => deleteUser(profile)} disabled={saving}
+                      className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                      <Trash2 className="h-3.5 w-3.5" />Supprimer
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -579,6 +643,80 @@ export default function Administration() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <form onSubmit={saveEditedUser} className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 className="font-bold text-slate-900">Modifier l’utilisateur</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Les changements sont appliqués immédiatement.</p>
+              </div>
+              <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-6">
+              <label className="block text-xs font-semibold text-slate-600">Nom complet
+                <input required value={editUserForm.full_name} onChange={event => setEditUserForm({ ...editUserForm, full_name: event.target.value })}
+                  className="mt-1.5 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-600">Adresse email
+                <input required type="email" value={editUserForm.email}
+                  disabled={editingUser.email.toLowerCase() === 'contact@webfityou.com'}
+                  onChange={event => setEditUserForm({ ...editUserForm, email: event.target.value })}
+                  className="mt-1.5 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500 disabled:bg-slate-100" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-600">Nouveau mot de passe
+                <input type="password" minLength={8} value={editUserForm.password}
+                  onChange={event => setEditUserForm({ ...editUserForm, password: event.target.value })}
+                  placeholder="Laisser vide pour ne pas le changer"
+                  className="mt-1.5 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
+              </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-xs font-semibold text-slate-600">Niveau d’accès
+                  <select value={editUserForm.role}
+                    disabled={editingUser.email.toLowerCase() === 'contact@webfityou.com'}
+                    onChange={event => setEditUserForm({ ...editUserForm, role: event.target.value as Profile['role'] })}
+                    className="mt-1.5 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm disabled:bg-slate-100">
+                    <option value="contributor">Lecture + ajout</option>
+                    <option value="editor">Lecture + ajout + modification</option>
+                    <option value="admin">Administrateur complet</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-3 self-end rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={editUserForm.active}
+                    disabled={editingUser.email.toLowerCase() === 'contact@webfityou.com'}
+                    onChange={event => setEditUserForm({ ...editUserForm, active: event.target.checked })}
+                    className="h-4 w-4 rounded" />
+                  Compte actif
+                </label>
+              </div>
+              {editingUser.email.toLowerCase() === 'contact@webfityou.com' && (
+                <p className="rounded-xl bg-violet-50 p-3 text-xs text-violet-800">Le compte administrateur principal peut modifier son nom et son mot de passe, mais son email, son rôle et son statut sont protégés.</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-4">
+              {editingUser.email.toLowerCase() !== 'contact@webfityou.com' ? (
+                <button type="button" onClick={() => deleteUser(editingUser)} disabled={saving}
+                  className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                  <Trash2 className="h-4 w-4" />Supprimer l’utilisateur
+                </button>
+              ) : <span />}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setEditingUser(null)} disabled={saving}
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white disabled:opacity-50">Annuler</button>
+                <button type="submit" disabled={saving}
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? 'Enregistrement…' : 'Enregistrer'}
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       )}
     </div>
