@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, BarChart2, CheckCircle2, Clock, Mail, Phone, Plus, Search,
   ShieldCheck, Target, UserCheck, UserCog, Users, KeyRound, Copy, Plug, History,
-  Pencil, Trash2, X, ScanSearch, RefreshCw, Eye,
+  Pencil, Trash2, X, ScanSearch, RefreshCw, Eye, GitMerge,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Profile, Tache } from '../types/database';
@@ -284,6 +284,29 @@ export default function Administration({ onOpenContact }: { onOpenContact: (id: 
     if (error) setMessage(`Erreur : ${error.message}`);
     else {
       setMessage('Contact supprimé. L’analyse des doublons a été actualisée.');
+      await Promise.all([loadBaseData(), loadDuplicates()]);
+    }
+    setSaving(false);
+  };
+
+  const mergeDuplicateContacts = async (group: DuplicateGroup, primary: Contact) => {
+    const duplicates = group.contacts.filter(contact => contact.id !== primary.id);
+    if (!duplicates.length) return;
+    const primaryLabel = primary.entreprise || [primary.prenom, primary.nom].filter(Boolean).join(' ') || 'ce contact';
+    if (!confirm(
+      `Conserver « ${primaryLabel} » et fusionner ${duplicates.length} autre(s) fiche(s) dans celle-ci ?\n\n` +
+      'Les champs manquants, notes, interactions, tâches, relances, documents et séquences seront conservés. Une sauvegarde complète sera créée avant la fusion.'
+    )) return;
+
+    setSaving(true);
+    setMessage('');
+    const { error } = await supabase.rpc('admin_merge_contacts', {
+      p_primary_id: primary.id,
+      p_duplicate_ids: duplicates.map(contact => contact.id),
+    });
+    if (error) setMessage(`Erreur : ${error.message}`);
+    else {
+      setMessage(`${duplicates.length} doublon(s) fusionné(s) dans « ${primaryLabel} ». Notes et historiques conservés.`);
       await Promise.all([loadBaseData(), loadDuplicates()]);
     }
     setSaving(false);
@@ -686,6 +709,11 @@ export default function Administration({ onOpenContact }: { onOpenContact: (id: 
                       <p><strong>Site :</strong> {contact.site_web || '—'}</p>
                     </div>
                     <div className="flex gap-2">
+                      <button onClick={() => void mergeDuplicateContacts(group, contact)} disabled={saving}
+                        className="flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        title="Conserver cette fiche et y rattacher toutes les autres">
+                        <GitMerge className="h-3.5 w-3.5" />Fusionner ici
+                      </button>
                       <button onClick={() => onOpenContact(contact.id)} className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                         <Eye className="h-3.5 w-3.5" />Examiner
                       </button>

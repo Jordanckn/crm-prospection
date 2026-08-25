@@ -61,7 +61,7 @@ const contactId = z.string().uuid().describe("Identifiant UUID du contact");
 const dateTime = z.string().datetime({ offset: true }).describe("Date ISO 8601 avec fuseau horaire");
 
 const server = new McpServer(
-  { name: `crm-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, version: "1.1.0" },
+  { name: `crm-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, version: "1.2.0" },
   {
     instructions: [
       `Cette connexion est exclusivement reservee a ${brandName}. Ne melange jamais ses prospects, templates, actions ou rapports avec une autre marque.`,
@@ -89,7 +89,7 @@ server.registerTool("crm_list_users", {
 
 server.registerTool("crm_search_contacts", {
   title: "Rechercher des prospects",
-  description: "Recherche les contacts par nom, société, email ou téléphone. Toujours utiliser cet outil avant de créer un contact.",
+  description: "Recherche les contacts par nom, société, email, téléphone, site ou réseau social. Toujours utiliser cet outil avant de créer un contact.",
   inputSchema: {
     query: z.string().optional().describe("Texte recherché"),
     assigned_to: z.string().uuid().optional().describe("Filtrer par commercial"),
@@ -116,6 +116,10 @@ server.registerTool("crm_create_contact", {
     pays: z.string().default("France"), secteur_activite: z.string().optional(),
     adresse: z.string().optional(), ville: z.string().optional(), code_postal: z.string().optional(),
     notes_entreprise: z.string().optional(), site_web: z.string().url().optional(),
+    instagram: z.string().max(500).optional().describe("URL ou identifiant Instagram"),
+    facebook: z.string().max(500).optional().describe("URL ou identifiant Facebook"),
+    linkedin: z.string().max(500).optional().describe("URL ou identifiant LinkedIn"),
+    twitter: z.string().max(500).optional().describe("URL ou identifiant X/Twitter"),
     tags: z.array(z.string()).max(50).optional(),
   },
 }, async args => execute(() => callApi("POST", "contacts", args)));
@@ -130,7 +134,12 @@ server.registerTool("crm_update_contact", {
     statut: z.enum(["Nouveau", "En cours", "Converti", "Perdu"]).optional(),
     assigned_to: z.string().uuid().optional(), pays: z.string().optional(), secteur_activite: z.string().optional(),
     adresse: z.string().optional(), ville: z.string().optional(), code_postal: z.string().optional(),
-    notes_entreprise: z.string().optional(), site_web: z.string().url().optional(), tags: z.array(z.string()).max(50).optional(),
+    notes_entreprise: z.string().optional(), site_web: z.string().url().optional(),
+    instagram: z.string().max(500).optional().describe("URL ou identifiant Instagram"),
+    facebook: z.string().max(500).optional().describe("URL ou identifiant Facebook"),
+    linkedin: z.string().max(500).optional().describe("URL ou identifiant LinkedIn"),
+    twitter: z.string().max(500).optional().describe("URL ou identifiant X/Twitter"),
+    tags: z.array(z.string()).max(50).optional(),
   },
 }, async ({ contact_id, ...changes }) => execute(() => callApi("PATCH", `contacts/${contact_id}`, changes)));
 
@@ -156,7 +165,9 @@ server.registerTool("crm_record_followup", {
       prenom: z.string().optional(), nom: z.string().optional(), entreprise: z.string().optional(),
       email: z.string().email().optional(), telephone: z.string().optional(),
       statut: z.enum(["Nouveau", "En cours", "Converti", "Perdu"]).optional(),
-      pays: z.string().optional(), secteur_activite: z.string().optional(), notes_entreprise: z.string().optional(),
+      pays: z.string().optional(), secteur_activite: z.string().optional(), notes_entreprise: z.string().optional(), site_web: z.string().optional(),
+      instagram: z.string().max(500).optional(), facebook: z.string().max(500).optional(),
+      linkedin: z.string().max(500).optional(), twitter: z.string().max(500).optional(),
       tags: z.array(z.string()).optional(),
     }).default({}),
     interaction: z.object({

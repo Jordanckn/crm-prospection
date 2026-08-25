@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, X, Check, AlertTriangle, ChevronDown, ArrowRight, FileSpreadsheet, Loader2 } from 'lucide-react';
+import { Upload, X, Check, AlertTriangle, ChevronDown, ArrowRight, FileSpreadsheet, Loader2, GitMerge, RefreshCw, Ban } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import type { Contact } from '../types/database';
+import { usePermissions } from '../contexts/PermissionsContext';
 
 // CRM field definitions with aliases for auto-detection
 const CRM_FIELDS = [
@@ -29,7 +31,28 @@ type CrmFieldKey = typeof CRM_FIELDS[number]['key'];
 type Mapping = Record<string, CrmFieldKey>;
 
 type ImportRow = Record<string, string>;
-type ImportResult = { success: number; errors: { row: number; msg: string }[] };
+type PreparedContact = { index: number; rowNumber: number; payload: Record<string, any> };
+type DuplicateCandidate = {
+  incoming_index: number;
+  contact_id: string;
+  match_types: Array<'entreprise' | 'siren_siret' | 'telephone' | 'site_web' | 'email'>;
+  existing_contact: Contact;
+};
+type DuplicateIssue = {
+  incoming: PreparedContact;
+  candidates: DuplicateCandidate[];
+  csvTarget?: PreparedContact;
+  matchTypes: DuplicateCandidate['match_types'];
+};
+type DuplicateAction = 'merge' | 'replace' | 'skip';
+type ImportResult = {
+  success: number;
+  inserted: number;
+  merged: number;
+  replaced: number;
+  skipped: number;
+  errors: { row: number; msg: string }[];
+};
 
 function parseCsv(text: string): { headers: string[]; rows: ImportRow[] } {
   // Detect delimiter: semicolon or comma
@@ -106,17 +129,47 @@ function normalizePays(val: string): 'France' | 'Israël' {
   return 'France';
 }
 
+const normalizeText = (value: unknown) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const normalizeDigits = (value: unknown) => String(value || '').replace(/[^0-9]/g, '');
+const normalizeWebsite = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[\/#?].*$/, '');
+
+function comparePreparedContacts(a: PreparedContact, b: PreparedContact): DuplicateCandidate['match_types'] {
+  const matches: DuplicateCandidate['match_types'] = [];
+  const companyA = normalizeText(a.payload.entreprise || `${a.payload.prenom} ${a.payload.nom}`);
+  const companyB = normalizeText(b.payload.entreprise || `${b.payload.prenom} ${b.payload.nom}`);
+  const sirenA = normalizeDigits(a.payload.siren_siret);
+  const sirenB = normalizeDigits(b.payload.siren_siret);
+  const phoneA = normalizeDigits(a.payload.telephone);
+  const phoneB = normalizeDigits(b.payload.telephone);
+  const websiteA = normalizeWebsite(a.payload.site_web);
+  const websiteB = normalizeWebsite(b.payload.site_web);
+  const genericSites = new Set(['facebook.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com', 'youtube.com', 'tiktok.com']);
+  const emailA = String(a.payload.email || '').trim().toLowerCase();
+  const emailB = String(b.payload.email || '').trim().toLowerCase();
+  if (companyA.length >= 4 && companyA === companyB) matches.push('entreprise');
+  if (sirenA.length >= 9 && sirenA === sirenB) matches.push('siren_siret');
+  if (phoneA.length >= 9 && phoneB.length >= 9 && phoneA.slice(-9) === phoneB.slice(-9)) matches.push('telephone');
+  if (websiteA.length >= 4 && websiteA === websiteB && !genericSites.has(websiteA)) matches.push('site_web');
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailA) && emailA === emailB) matches.push('email');
+  return matches;
+}
+
 type Props = { onClose: () => void; onImported: () => void };
 
-type Step = 'drop' | 'mapping' | 'preview' | 'importing' | 'done';
+type Step = 'drop' | 'mapping' | 'preview' | 'checking' | 'duplicates' | 'importing' | 'done';
 
 export default function CsvImport({ onClose, onImported }: Props) {
+  const { canModify } = usePermissions();
   const [step, setStep] = useState<Step>('drop');
   const [dragging, setDragging] = useState(false);
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [mapping, setMapping] = useState<Mapping>({});
-  const [result, setResult] = useState<ImportResult>({ success: 0, errors: [] });
+  const [result, setResult] = useState<ImportResult>({ success: 0, inserted: 0, merged: 0, replaced: 0, skipped: 0, errors: [] });
+  const [preparedContacts, setPreparedContacts] = useState<PreparedContact[]>([]);
+  const [duplicateIssues, setDuplicateIssues] = useState<DuplicateIssue[]>([]);
+  const [decisions, setDecisions] = useState<Record<number, DuplicateAction>>({});
+  const [selectedCandidates, setSelectedCandidates] = useState<Record<number, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((file: File) => {
@@ -140,13 +193,9 @@ export default function CsvImport({ onClose, onImported }: Props) {
     if (file) handleFile(file);
   };
 
-  const doImport = async () => {
-    setStep('importing');
+  const prepareImport = () => {
     const errors: { row: number; msg: string }[] = [];
-    let success = 0;
-    const BATCH = 50;
-
-    const toInsert = rows.map((row, i) => {
+    const contacts = rows.map((row, i): PreparedContact | null => {
       const obj: Record<string, any> = {
         prenom: '', nom: '', email: '', telephone: '', entreprise: '',
         adresse: '', ville: '', code_postal: '', tags: [],
@@ -167,26 +216,146 @@ export default function CsvImport({ onClose, onImported }: Props) {
         errors.push({ row: i + 2, msg: 'Ligne vide ou sans données identifiables' });
         return null;
       }
-      return obj;
-    }).filter(Boolean);
+      return { index: i, rowNumber: i + 2, payload: obj };
+    }).filter((contact): contact is PreparedContact => Boolean(contact));
+    return { contacts, errors };
+  };
+
+  const executeImport = async (
+    contacts: PreparedContact[],
+    initialErrors: { row: number; msg: string }[],
+    issues: DuplicateIssue[] = [],
+    selectedDecisions: Record<number, DuplicateAction> = {},
+  ) => {
+    setStep('importing');
+    const errors = [...initialErrors];
+    let inserted = 0;
+    let merged = 0;
+    let replaced = 0;
+    let skipped = 0;
+    const BATCH = 50;
+    const duplicateIndexes = new Set(issues.map(issue => issue.incoming.index));
+    const workingContacts = contacts.map(contact => ({ ...contact, payload: { ...contact.payload } }));
+    const mappedFieldKeys = [...new Set(Object.values(mapping).filter(value => value !== '_ignore'))];
+
+    for (const issue of issues) {
+      const action = selectedDecisions[issue.incoming.index];
+      if (action === 'skip') { skipped++; continue; }
+      if (issue.csvTarget) {
+        const target = workingContacts.find(contact => contact.index === issue.csvTarget?.index);
+        if (!target || (action !== 'merge' && action !== 'replace')) {
+          errors.push({ row: issue.incoming.rowNumber, msg: 'Décision de doublon CSV incomplète' });
+          continue;
+        }
+        if (action === 'replace') target.payload = { ...issue.incoming.payload };
+        else {
+          for (const [key, value] of Object.entries(issue.incoming.payload)) {
+            if (key === 'notes_entreprise') {
+              const notes = [...new Set([target.payload[key], value].map(note => String(note || '').trim()).filter(Boolean))];
+              target.payload[key] = notes.join('\n\n');
+            } else if (!String(target.payload[key] ?? '').trim() && String(value ?? '').trim()) target.payload[key] = value;
+          }
+        }
+        if (action === 'merge') merged++; else replaced++;
+        continue;
+      }
+      const contactId = selectedCandidates[issue.incoming.index] || issue.candidates[0]?.contact_id;
+      if (!contactId || (action !== 'merge' && action !== 'replace')) {
+        errors.push({ row: issue.incoming.rowNumber, msg: 'Décision de doublon incomplète' });
+        continue;
+      }
+      const { error } = await supabase.rpc('resolve_csv_contact_duplicate', {
+        p_contact_id: contactId,
+        p_incoming: issue.incoming.payload,
+        p_action: action,
+        p_mapped_fields: mappedFieldKeys,
+      });
+      if (error) errors.push({ row: issue.incoming.rowNumber, msg: error.message });
+      else if (action === 'merge') merged++;
+      else replaced++;
+    }
+
+    const toInsert = workingContacts.filter(contact => !duplicateIndexes.has(contact.index));
 
     for (let i = 0; i < toInsert.length; i += BATCH) {
       const batch = toInsert.slice(i, i + BATCH);
-      const { error, data } = await supabase.from('contacts').insert(batch).select('id');
+      const { error, data } = await supabase.from('contacts').insert(batch.map(contact => contact.payload)).select('id');
       if (error) {
-        batch.forEach((_, j) => errors.push({ row: i + j + 2, msg: error.message }));
+        batch.forEach(contact => errors.push({ row: contact.rowNumber, msg: error.message }));
       } else {
-        success += data?.length || 0;
+        inserted += data?.length || 0;
       }
     }
 
-    setResult({ success, errors });
+    const success = inserted + merged + replaced;
+    setResult({ success, inserted, merged, replaced, skipped, errors });
     setStep('done');
     if (success > 0) onImported();
   };
 
+  const analyzeAndImport = async () => {
+    const prepared = prepareImport();
+    setPreparedContacts(prepared.contacts);
+    setStep('checking');
+    const payload = prepared.contacts.map(contact => ({ index: contact.index, ...contact.payload }));
+    const { data, error } = await supabase.rpc('find_csv_contact_duplicates', { p_rows: payload });
+    if (error) {
+      setResult({ success: 0, inserted: 0, merged: 0, replaced: 0, skipped: 0, errors: [{ row: 1, msg: error.message }] });
+      setStep('done');
+      return;
+    }
+
+    const candidates = (data || []) as DuplicateCandidate[];
+    const grouped = new Map<number, DuplicateCandidate[]>();
+    for (const candidate of candidates) grouped.set(candidate.incoming_index, [...(grouped.get(candidate.incoming_index) || []), candidate]);
+    const databaseIssues: DuplicateIssue[] = prepared.contacts
+      .filter(contact => grouped.has(contact.index))
+      .map(contact => {
+        const contactCandidates = grouped.get(contact.index) || [];
+        return { incoming: contact, candidates: contactCandidates, matchTypes: contactCandidates[0]?.match_types || [] };
+      });
+
+    // Controle aussi les repetitions contenues dans le fichier lui-meme.
+    const databaseIndexes = new Set(databaseIssues.map(issue => issue.incoming.index));
+    const csvIssues: DuplicateIssue[] = [];
+    const csvRepresentatives: PreparedContact[] = [];
+    for (const contact of prepared.contacts.filter(item => !databaseIndexes.has(item.index))) {
+      const match = csvRepresentatives
+        .map(target => ({ target, criteria: comparePreparedContacts(contact, target) }))
+        .find(item => item.criteria.length > 0);
+      if (match) csvIssues.push({ incoming: contact, candidates: [], csvTarget: match.target, matchTypes: match.criteria });
+      else csvRepresentatives.push(contact);
+    }
+    const issues = [...databaseIssues, ...csvIssues].sort((a, b) => a.incoming.index - b.incoming.index);
+
+    if (!issues.length) {
+      await executeImport(prepared.contacts, prepared.errors);
+      return;
+    }
+
+    setDuplicateIssues(issues);
+    setDecisions({});
+    setSelectedCandidates(Object.fromEntries(databaseIssues.map(issue => [issue.incoming.index, issue.candidates[0].contact_id])));
+    setResult(current => ({ ...current, errors: prepared.errors }));
+    setStep('duplicates');
+  };
+
+  const applyDecisionToAll = (action: DuplicateAction) => {
+    setDecisions(Object.fromEntries(duplicateIssues.map(issue => [issue.incoming.index, action])));
+  };
+
+  const confirmDuplicateChoices = async () => {
+    if (duplicateIssues.some(issue => !decisions[issue.incoming.index])) return;
+    await executeImport(preparedContacts, result.errors, duplicateIssues, decisions);
+  };
+
   const mappedFields = new Set(Object.values(mapping).filter(v => v !== '_ignore'));
   const hasNom = mappedFields.has('nom') || mappedFields.has('prenom');
+  const allDuplicatesResolved = duplicateIssues.every(issue => Boolean(decisions[issue.incoming.index]));
+  const hasDatabaseDuplicates = duplicateIssues.some(issue => !issue.csvTarget);
+  const criterionLabels: Record<DuplicateCandidate['match_types'][number], string> = {
+    entreprise: 'Entreprise', siren_siret: 'SIREN/SIRET', telephone: 'Téléphone', site_web: 'Site web', email: 'Email',
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -204,6 +373,8 @@ export default function CsvImport({ onClose, onImported }: Props) {
                 {step === 'drop' && 'Glissez votre fichier ou cliquez pour parcourir'}
                 {step === 'mapping' && `${rows.length} contacts détectés — vérifiez la correspondance des colonnes`}
                 {step === 'preview' && `Aperçu des ${Math.min(rows.length, 5)} premiers contacts`}
+                {step === 'checking' && 'Recherche de correspondances dans le CRM...'}
+                {step === 'duplicates' && `${duplicateIssues.length} doublon(s) potentiel(s) à examiner`}
                 {step === 'importing' && 'Import en cours...'}
                 {step === 'done' && 'Import terminé'}
               </p>
@@ -215,9 +386,9 @@ export default function CsvImport({ onClose, onImported }: Props) {
         </div>
 
         {/* Steps indicator */}
-        {(step === 'mapping' || step === 'preview') && (
+        {(step === 'mapping' || step === 'preview' || step === 'duplicates') && (
           <div className="px-6 py-3 border-b border-slate-100 flex items-center gap-2 text-xs flex-shrink-0">
-            {[['mapping', '1. Correspondance'], ['preview', '2. Aperçu']].map(([s, label], i) => (
+            {[['mapping', '1. Correspondance'], ['preview', '2. Aperçu'], ['duplicates', '3. Doublons']].map(([s, label], i) => (
               <div key={s} className="flex items-center gap-2">
                 {i > 0 && <ArrowRight className="w-3 h-3 text-slate-300" />}
                 <span className={`px-2.5 py-1 rounded-full font-semibold ${step === s ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>{label}</span>
@@ -347,13 +518,112 @@ export default function CsvImport({ onClose, onImported }: Props) {
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700 font-medium">
-                {rows.length} contacts seront importés dans votre CRM.
+                Le CRM vérifiera d’abord l’entreprise, le SIREN/SIRET, le téléphone, le site internet et l’email. Aucun doublon potentiel ne sera ajouté sans votre décision.
               </div>
 
               <div className="flex gap-3">
                 <button onClick={() => setStep('mapping')} className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50">Retour</button>
-                <button onClick={doImport} className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-sm">
-                  Importer {rows.length} contacts
+                <button onClick={() => void analyzeAndImport()} className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-sm">
+                  Analyser puis importer {rows.length} contacts
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── STEP: DUPLICATE CHECK ── */}
+          {step === 'checking' && (
+            <div className="p-16 text-center">
+              <Loader2 className="w-12 h-12 text-violet-600 animate-spin mx-auto mb-4" />
+              <p className="font-semibold text-slate-700">Analyse des doublons avant import...</p>
+              <p className="text-sm text-slate-400 mt-1">Comparaison avec l’espace actif et entre les lignes du fichier</p>
+            </div>
+          )}
+
+          {/* ── STEP: DUPLICATE REVIEW ── */}
+          {step === 'duplicates' && (
+            <div className="p-6 space-y-5">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+                  <div>
+                    <p className="font-bold text-amber-900">{duplicateIssues.length} doublon(s) potentiel(s) détecté(s)</p>
+                    <p className="mt-1 text-sm text-amber-700">Choisissez une action pour chaque ligne. Les contacts sans correspondance seront ajoutés normalement.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span className="self-center text-xs font-semibold text-slate-500">Appliquer à tous :</span>
+                <button onClick={() => applyDecisionToAll('merge')} disabled={!canModify && hasDatabaseDuplicates} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-bold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Fusionner</button>
+                <button onClick={() => applyDecisionToAll('replace')} disabled={!canModify && hasDatabaseDuplicates} className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs font-bold text-orange-700 disabled:cursor-not-allowed disabled:opacity-40">Remplacer</button>
+                <button onClick={() => applyDecisionToAll('skip')} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-600">Ne pas ajouter</button>
+              </div>
+
+              {!canModify && hasDatabaseDuplicates && (
+                <p className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-700">Votre rôle permet l’ajout mais pas la modification des fiches existantes. Vous pouvez ne pas ajouter les doublons ; un administrateur ou un éditeur peut les fusionner ou les remplacer.</p>
+              )}
+
+              <div className="space-y-4">
+                {duplicateIssues.map(issue => {
+                  const selectedId = selectedCandidates[issue.incoming.index] || issue.candidates[0]?.contact_id;
+                  const candidate = issue.candidates.find(item => item.contact_id === selectedId) || issue.candidates[0];
+                  const incoming = issue.incoming.payload;
+                  const existing = candidate?.existing_contact || issue.csvTarget?.payload;
+                  const displayedCriteria = candidate?.match_types || issue.matchTypes;
+                  return (
+                    <div key={issue.incoming.index} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                        <p className="text-sm font-bold text-slate-800">Ligne CSV {issue.incoming.rowNumber} · {incoming.entreprise || [incoming.prenom, incoming.nom].filter(Boolean).join(' ') || 'Sans nom'}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {displayedCriteria.map(type => <span key={type} className="rounded-full bg-violet-100 px-2 py-1 text-[11px] font-bold text-violet-700">{criterionLabels[type]}</span>)}
+                        </div>
+                      </div>
+                      <div className="grid gap-3 p-4 md:grid-cols-2">
+                        <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-slate-700">
+                          <p className="mb-1 font-bold text-blue-800">Données du CSV</p>
+                          <p><strong>Entreprise :</strong> {incoming.entreprise || '—'}</p>
+                          <p><strong>Contact :</strong> {[incoming.prenom, incoming.nom].filter(Boolean).join(' ') || '—'}</p>
+                          <p><strong>Email :</strong> {incoming.email || '—'}</p>
+                          <p><strong>Téléphone :</strong> {incoming.telephone || '—'}</p>
+                          <p><strong>Notes :</strong> {incoming.notes_entreprise || '—'}</p>
+                        </div>
+                        <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-3 text-xs leading-5 text-slate-700">
+                          <p className="mb-1 font-bold text-amber-800">{issue.csvTarget ? `Autre ligne du CSV (ligne ${issue.csvTarget.rowNumber})` : 'Fiche déjà présente'}</p>
+                          {issue.candidates.length > 1 && (
+                            <select value={selectedId} onChange={event => setSelectedCandidates(current => ({ ...current, [issue.incoming.index]: event.target.value }))} className="mb-2 w-full rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-xs">
+                              {issue.candidates.map(item => <option key={item.contact_id} value={item.contact_id}>{item.existing_contact.entreprise || `${item.existing_contact.prenom} ${item.existing_contact.nom}`} · {item.match_types.length} critère(s)</option>)}
+                            </select>
+                          )}
+                          <p><strong>Entreprise :</strong> {existing?.entreprise || '—'}</p>
+                          <p><strong>Contact :</strong> {[existing?.prenom, existing?.nom].filter(Boolean).join(' ') || '—'}</p>
+                          <p><strong>Email :</strong> {existing?.email || '—'}</p>
+                          <p><strong>Téléphone :</strong> {existing?.telephone || '—'}</p>
+                          <p><strong>Notes :</strong> {existing?.notes_entreprise || '—'}</p>
+                        </div>
+                      </div>
+                      <div className="grid gap-2 border-t border-slate-100 p-4 sm:grid-cols-3">
+                        <button onClick={() => setDecisions(current => ({ ...current, [issue.incoming.index]: 'merge' }))} disabled={!canModify && !issue.csvTarget}
+                          className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${decisions[issue.incoming.index] === 'merge' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}>
+                          <GitMerge className="h-4 w-4" />Fusionner les éléments manquants
+                        </button>
+                        <button onClick={() => setDecisions(current => ({ ...current, [issue.incoming.index]: 'replace' }))} disabled={!canModify && !issue.csvTarget}
+                          className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${decisions[issue.incoming.index] === 'replace' ? 'border-orange-600 bg-orange-600 text-white' : 'border-orange-200 text-orange-700 hover:bg-orange-50'}`}>
+                          <RefreshCw className="h-4 w-4" />Remplacer par le CSV
+                        </button>
+                        <button onClick={() => setDecisions(current => ({ ...current, [issue.incoming.index]: 'skip' }))}
+                          className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold ${decisions[issue.incoming.index] === 'skip' ? 'border-slate-700 bg-slate-700 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+                          <Ban className="h-4 w-4" />Ne pas ajouter
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="sticky bottom-0 flex gap-3 border-t border-slate-100 bg-white pt-4">
+                <button onClick={() => setStep('preview')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Retour</button>
+                <button onClick={() => void confirmDuplicateChoices()} disabled={!allDuplicatesResolved} className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  Confirmer les choix et terminer l’import
                 </button>
               </div>
             </div>
@@ -376,11 +646,18 @@ export default function CsvImport({ onClose, onImported }: Props) {
                   <Check className={`w-7 h-7 ${result.success > 0 ? 'text-emerald-600' : 'text-red-600'}`} />
                 </div>
                 <p className={`text-2xl font-bold mb-1 ${result.success > 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  {result.success} contact{result.success > 1 ? 's' : ''} importé{result.success > 1 ? 's' : ''}
+                  {result.success} contact{result.success > 1 ? 's' : ''} traité{result.success > 1 ? 's' : ''}
                 </p>
                 {result.errors.length > 0 && (
                   <p className="text-sm text-amber-600">{result.errors.length} ligne(s) ignorée(s)</p>
                 )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
+                <div className="rounded-xl bg-blue-50 p-3"><strong className="block text-lg text-blue-700">{result.inserted}</strong><span className="text-blue-600">Ajouté(s)</span></div>
+                <div className="rounded-xl bg-emerald-50 p-3"><strong className="block text-lg text-emerald-700">{result.merged}</strong><span className="text-emerald-600">Fusionné(s)</span></div>
+                <div className="rounded-xl bg-orange-50 p-3"><strong className="block text-lg text-orange-700">{result.replaced}</strong><span className="text-orange-600">Remplacé(s)</span></div>
+                <div className="rounded-xl bg-slate-100 p-3"><strong className="block text-lg text-slate-700">{result.skipped}</strong><span className="text-slate-600">Non ajouté(s)</span></div>
               </div>
 
               {result.errors.length > 0 && (

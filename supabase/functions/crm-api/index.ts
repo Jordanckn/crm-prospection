@@ -323,7 +323,7 @@ async function route(
     const limit = integer(url.searchParams.get("limit"), 50, 1, 200);
     let query = service.from("contacts").select("*, assigned_user:profiles!contacts_assigned_to_fkey(id, full_name, email)", { count: "exact" }).eq("brand_id", actor.brandId);
     const search = cleanSearch(url.searchParams.get("query") || "");
-    if (search) query = query.or(`prenom.ilike.%${search}%,nom.ilike.%${search}%,entreprise.ilike.%${search}%,email.ilike.%${search}%,telephone.ilike.%${search}%`);
+    if (search) query = query.or(`prenom.ilike.%${search}%,nom.ilike.%${search}%,entreprise.ilike.%${search}%,email.ilike.%${search}%,telephone.ilike.%${search}%,site_web.ilike.%${search}%,instagram.ilike.%${search}%,facebook.ilike.%${search}%,linkedin.ilike.%${search}%,twitter.ilike.%${search}%`);
     const assignedTo = url.searchParams.get("assigned_to");
     if (assignedTo) query = query.eq("assigned_to", assignedTo);
     const status = url.searchParams.get("status");
@@ -354,7 +354,10 @@ async function route(
       pays: asString(body.pays, 80) || "France", secteur_activite: asString(body.secteur_activite, 160),
       adresse: asString(body.adresse, 300), ville: asString(body.ville, 120), code_postal: asString(body.code_postal, 30),
       notes_entreprise: asString(body.notes_entreprise), tags: asStringArray(body.tags, 50),
-      site_web: asString(body.site_web, 500), assigned_to: assignedTo, created_by: assignedTo,
+      site_web: asString(body.site_web, 500),
+      instagram: asString(body.instagram, 500), facebook: asString(body.facebook, 500),
+      linkedin: asString(body.linkedin, 500), twitter: asString(body.twitter ?? body.x, 500),
+      assigned_to: assignedTo, created_by: assignedTo,
       brand_id: actor.brandId,
     };
     if (!payload.prenom && !payload.nom && !payload.entreprise) throw new ApiError(400, "Indiquez au moins un nom ou une entreprise.");
@@ -365,9 +368,10 @@ async function route(
 
   if (resource === "contacts" && method === "PATCH" && id) {
     requirePermission(actor, "contacts:write");
-    const allowed = ["prenom", "nom", "email", "telephone", "entreprise", "statut", "pays", "secteur_activite", "adresse", "ville", "code_postal", "notes_entreprise", "site_web"];
+    const allowed = ["prenom", "nom", "email", "telephone", "entreprise", "statut", "pays", "secteur_activite", "adresse", "ville", "code_postal", "notes_entreprise", "site_web", "instagram", "facebook", "linkedin", "twitter"];
     const updates: Record<string, unknown> = {};
     for (const field of allowed) if (body[field] !== undefined) updates[field] = asString(body[field], field === "notes_entreprise" ? 10_000 : 500);
+    if (body.x !== undefined && body.twitter === undefined) updates.twitter = asString(body.x, 500);
     if (body.tags !== undefined) updates.tags = asStringArray(body.tags, 50);
     if (body.assigned_to !== undefined) {
       requirePermission(actor, "assignments:write");
@@ -410,6 +414,16 @@ async function route(
       p_assigned_to: assignedTo,
     });
     if (error) throw new ApiError(400, error.message);
+    const socialUpdates: Record<string, string> = {};
+    for (const field of ["instagram", "facebook", "linkedin", "twitter"] as const) {
+      if (contactPayload[field] !== undefined) socialUpdates[field] = asString(contactPayload[field], 500);
+    }
+    if (contactPayload.x !== undefined && contactPayload.twitter === undefined) socialUpdates.twitter = asString(contactPayload.x, 500);
+    if (Object.keys(socialUpdates).length && data?.contact_id) {
+      const { error: socialError } = await service.from("contacts").update(socialUpdates)
+        .eq("id", data.contact_id).eq("brand_id", actor.brandId);
+      if (socialError) throw socialError;
+    }
     return { action: "followups.record", entityType: "contact", entityId: data?.contact_id, result: ok(data, 201) };
   }
 

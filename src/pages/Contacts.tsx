@@ -737,7 +737,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
       {showCsvImport && (
         <CsvImport
           onClose={() => setShowCsvImport(false)}
-          onImported={() => { loadContacts(); setShowCsvImport(false); }}
+          onImported={() => { void loadContacts(); }}
         />
       )}
 

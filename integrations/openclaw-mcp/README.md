@@ -40,5 +40,8 @@ openclaw mcp add epiderme-ai-crm \
 
 Les deux clés sont distinctes : une erreur de sélection par OpenClaw ne peut donc pas contaminer l'autre espace.
 
+Les outils `crm_create_contact`, `crm_update_contact` et `crm_record_followup`
+acceptent les champs `instagram`, `facebook`, `linkedin` et `twitter` (X).
+
 La clé n'est affichée qu'une seule fois. Conservez-la dans le gestionnaire de secrets
 d'OpenClaw, jamais dans Git ou dans un fichier partagé.

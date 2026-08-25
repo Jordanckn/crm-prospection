@@ -70,6 +70,19 @@ Idempotency-Key: <UUID unique pour cette action>
 | GET | `/reports` | KPI d'un utilisateur sur une période |
 | GET | `/audit` | Journal technique |
 
+Les opérations de création, modification et suivi acceptent également les réseaux sociaux :
+
+```json
+{
+  "instagram": "https://instagram.com/entreprise",
+  "facebook": "https://facebook.com/entreprise",
+  "linkedin": "https://linkedin.com/company/entreprise",
+  "twitter": "https://x.com/entreprise"
+}
+```
+
+Le champ `x` est aussi accepté par l'API comme alias de `twitter`.
+
 ## Déploiement Supabase
 
 Les migrations doivent être appliquées avant les fonctions :
