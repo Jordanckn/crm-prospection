@@ -10,6 +10,7 @@ import type { Interaction, Contact, Profile, Template } from '../types/database'
 import ContactSearchSelect from '../components/ContactSearchSelect';
 import ContactSidePanel from '../components/ContactSidePanel';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useBrand } from '../contexts/BrandContext';
 import { formatInTimezone, safeTimezone, toZonedDateTimeInput } from '../lib/timezone';
 
 const TYPES = ['Appel', 'Email', 'WhatsApp', 'SMS', 'Facebook', 'Instagram'] as const;
@@ -76,6 +77,7 @@ type Props = {
 export default function Interactions({ onOpenContact, timezone: requestedTimezone, profileId }: Props) {
   const timezone = safeTimezone(requestedTimezone);
   const { canModify, canDelete } = usePermissions();
+  const { brand } = useBrand();
   const [interactions, setInteractions] = useState<(Interaction & { contacts?: Contact })[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -166,6 +168,7 @@ export default function Interactions({ onOpenContact, timezone: requestedTimezon
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          brand_code: brand.code,
           contact_id: contact.id,
           to: contact.email,
           subject: template.objet || template.titre,

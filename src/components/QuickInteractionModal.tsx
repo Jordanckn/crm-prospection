@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Phone, Mail, MessageCircle, Clock, Check, Plus, Sparkles, ChevronDown, Send, FileText } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact, Interaction, Template } from '../types/database';
+import { useBrand } from '../contexts/BrandContext';
 
 const TYPES = ['Appel', 'Email', 'WhatsApp', 'SMS', 'Facebook', 'Instagram'] as const;
 const RESULTATS = ['Pas de réponse', 'Répondu', 'Intéressé', 'Non intéressé', 'Relance'] as const;
@@ -63,6 +64,7 @@ type Props = {
 };
 
 export default function QuickInteractionModal({ contact, initialDuration = 0, initialType = 'Appel', onClose, onSaved }: Props) {
+  const { brand } = useBrand();
   const today = new Date();
   const defaultEcheance = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -138,6 +140,7 @@ export default function QuickInteractionModal({ contact, initialDuration = 0, in
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          brand_code: brand.code,
           contact_id: contact.id,
           to: contact.email,
           subject: template.objet || template.titre,

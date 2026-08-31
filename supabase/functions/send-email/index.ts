@@ -14,6 +14,7 @@ interface EmailPayload {
   subject: string;
   html: string;
   text?: string;
+  brand_code?: string;
   contact_id?: string;
   sender_code?: string;
   attachment?: { filename: string; contentType: string; contentBase64: string };
@@ -44,20 +45,64 @@ Deno.serve(async (req: Request) => {
     const { data: { user }, error: authError } = await service.auth.getUser(token);
     if (authError || !user) return respond({ error: "Session invalide." }, 401);
 
-    const { data: profile } = await service.from("profiles")
-      .select("active, active_brand_id, brand:brands!profiles_active_brand_id_fkey(*)")
-      .eq("id", user.id).maybeSingle();
-    const brand = Array.isArray(profile?.brand) ? profile.brand[0] : profile?.brand;
-    if (!profile?.active || !brand?.active) return respond({ error: "Profil ou espace de marque inactif." }, 403);
-
     const payload = await req.json() as EmailPayload;
+    const { data: profile } = await service.from("profiles")
+      .select("active, active_brand_id")
+      .eq("id", user.id).maybeSingle();
+    if (!profile?.active) return respond({ error: "Profil utilisateur inactif." }, 403);
+
+    const { data: memberships } = await service.from("profile_brands").select("brand_id")
+      .eq("profile_id", user.id);
+    const accessibleBrandIds = [...new Set((memberships || []).map(item => String(item.brand_id)))];
+    if (!accessibleBrandIds.length) return respond({ error: "Aucun espace de marque accessible." }, 403);
+
+    let brandId = accessibleBrandIds.includes(String(profile.active_brand_id))
+      ? String(profile.active_brand_id)
+      : accessibleBrandIds[0];
+    if (payload.brand_code) {
+      const { data: requestedBrand } = await service.from("brands")
+        .select("id, active").eq("code", payload.brand_code).eq("active", true).maybeSingle();
+      if (!requestedBrand) return respond({ error: "Espace de marque introuvable ou inactif." }, 404);
+      if (!accessibleBrandIds.includes(requestedBrand.id)) return respond({ error: "Vous n'avez pas accès à cet espace de marque." }, 403);
+      brandId = requestedBrand.id;
+    } else if (payload.sender_code) {
+      const { data: requestedSender } = await service.from("brand_email_senders").select("brand_id")
+        .eq("code", payload.sender_code).eq("active", true).maybeSingle();
+      if (!requestedSender || !accessibleBrandIds.includes(requestedSender.brand_id)) {
+        return respond({ error: "Expéditeur inaccessible dans vos espaces." }, 403);
+      }
+      brandId = requestedSender.brand_id;
+    } else {
+      // Ancienne interface Netlify : elle ne transmet pas encore la marque. On la
+      // deduit d'abord du destinataire, puis de l'objet du template si necessaire.
+      const { data: contactMatches } = await service.from("contacts").select("brand_id")
+        .in("brand_id", accessibleBrandIds).ilike("email", String(payload.to || '').trim()).limit(20);
+      const contactBrandIds = [...new Set((contactMatches || []).map(item => String(item.brand_id)))];
+      if (contactBrandIds.length === 1) {
+        brandId = contactBrandIds[0];
+      } else {
+        const normalizedSubject = String(payload.subject || '').trim();
+        if (normalizedSubject) {
+          const [objectMatches, titleMatches] = await Promise.all([
+            service.from("templates").select("brand_id").in("brand_id", accessibleBrandIds).eq("objet", normalizedSubject).limit(20),
+            service.from("templates").select("brand_id").in("brand_id", accessibleBrandIds).eq("titre", normalizedSubject).limit(20),
+          ]);
+          const templateBrandIds = [...new Set([...(objectMatches.data || []), ...(titleMatches.data || [])].map(item => String(item.brand_id)))];
+          if (templateBrandIds.length === 1) brandId = templateBrandIds[0];
+        }
+      }
+    }
+    const { data: brand } = await service.from("brands").select("*")
+      .eq("id", brandId).eq("active", true).maybeSingle();
+    if (!brand) return respond({ error: "Espace de marque inactif." }, 403);
+
     const { to, subject, html, text, attachment } = payload;
     if (!to || !subject || !html) return respond({ error: "Champs obligatoires : destinataire, objet et contenu." }, 400);
 
     let contact: Record<string, unknown> | null = null;
     if (payload.contact_id) {
       const { data, error } = await service.from("contacts").select("*")
-        .eq("id", payload.contact_id).eq("brand_id", profile.active_brand_id).maybeSingle();
+        .eq("id", payload.contact_id).eq("brand_id", brandId).maybeSingle();
       if (error) throw error;
       if (!data) return respond({ error: "Contact introuvable dans cet espace." }, 404);
       contact = data;
@@ -68,13 +113,13 @@ Deno.serve(async (req: Request) => {
       // Compatibilite avec les anciennes interfaces deja publiees : rattache l'envoi
       // au contact par son email, ce qui permet aussi d'appliquer le bon routage pays.
       const { data, error } = await service.from("contacts").select("*")
-        .eq("brand_id", profile.active_brand_id).ilike("email", to.trim()).limit(1).maybeSingle();
+        .eq("brand_id", brandId).ilike("email", to.trim()).limit(1).maybeSingle();
       if (error) throw error;
       contact = data || null;
     }
 
     const { data: optedOut } = await service.from("contacts").select("id")
-      .eq("brand_id", profile.active_brand_id).ilike("email", to.trim())
+      .eq("brand_id", brandId).ilike("email", to.trim())
       .not("email_opted_out_at", "is", null).limit(1).maybeSingle();
     if (optedOut || contact?.email_opted_out_at) return respond({ error: "Ce contact s'est desinscrit des emails de cet espace." }, 409);
 
@@ -94,7 +139,7 @@ Deno.serve(async (req: Request) => {
 
     if (brand.code === 'epiderme_ai') {
       let senderQuery = service.from('brand_email_senders').select('*')
-        .eq('brand_id', profile.active_brand_id).eq('active', true);
+        .eq('brand_id', brandId).eq('active', true);
       if (payload.sender_code) {
         senderQuery = senderQuery.eq('code', payload.sender_code);
         routing = 'manual_override';
@@ -156,7 +201,7 @@ Deno.serve(async (req: Request) => {
         duree: 0,
         resultat: 'Envoyé',
         notes: `[Email manuel] ${subject} - Expediteur : ${sender.from_email} - ${provider.toUpperCase()} #${messageId}${attachment ? ` - PJ : ${attachment.filename}` : ''}`,
-        brand_id: profile.active_brand_id,
+        brand_id: brandId,
       });
       if (interactionError) trackingWarning = interactionError.message;
       else await service.from('contacts').update({ derniere_interaction: now }).eq('id', contact.id);

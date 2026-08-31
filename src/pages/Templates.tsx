@@ -225,6 +225,7 @@ export default function Templates() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          brand_code: brand.code,
           to: sendTo,
           subject: sendSubject,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
