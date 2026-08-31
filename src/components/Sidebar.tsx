@@ -40,10 +40,20 @@ type SidebarProps = {
 
 export default function Sidebar({ currentPage, onNavigate, profile }: SidebarProps) {
   const [showScriptModal, setShowScriptModal] = useState(false);
+  const [brandError, setBrandError] = useState('');
   const { brand, brands, switching, switchBrand } = useBrand();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+  };
+
+  const handleBrandChange = async (code: string) => {
+    setBrandError('');
+    try {
+      await switchBrand(code);
+    } catch (error) {
+      setBrandError(error instanceof Error ? error.message : "Impossible de changer d'espace.");
+    }
   };
 
   return (
@@ -63,7 +73,7 @@ export default function Sidebar({ currentPage, onNavigate, profile }: SidebarPro
                   aria-label="Espace de marque"
                   value={brand.code}
                   disabled={switching}
-                  onChange={event => void switchBrand(event.target.value)}
+                  onChange={event => void handleBrandChange(event.target.value)}
                   className="w-full cursor-pointer border-0 bg-transparent p-0 text-base font-bold leading-tight text-white outline-none disabled:opacity-60"
                 >
                   {brands.map(item => <option key={item.id} value={item.code} className="bg-slate-950">{item.name}</option>)}
@@ -72,6 +82,7 @@ export default function Sidebar({ currentPage, onNavigate, profile }: SidebarPro
                 <h1 className="text-base font-bold text-white leading-tight">{brand.name}</h1>
               )}
               <p className="text-slate-400 text-xs mt-0.5">{switching ? 'Changement…' : 'Connect CRM'}</p>
+              {brandError && <p className="mt-1 text-[10px] font-semibold text-red-400">{brandError}</p>}
             </div>
           </div>
         </div>

@@ -38,11 +38,11 @@ export function BrandProvider({ profile, children }: { profile: Profile | null; 
     if (!profile) return;
     let cancelled = false;
     Promise.all([
-      supabase.from('profiles').select('active_brand_id').eq('id', profile.id).maybeSingle(),
+      supabase.rpc('current_brand_id'),
       supabase.from('brands').select('id, code, name, logo_url, accent_color, email_provider, from_name, from_email, reply_to, unsubscribe_email').order('name'),
-    ]).then(([profileResult, brandsResult]) => {
+    ]).then(([activeBrandResult, brandsResult]) => {
       if (cancelled) return;
-      const freshActiveBrandId = profileResult.data?.active_brand_id || profile.active_brand_id;
+      const freshActiveBrandId = typeof activeBrandResult.data === 'string' ? activeBrandResult.data : profile.active_brand_id;
       setActiveBrandId(freshActiveBrandId);
       if (!brandsResult.error && brandsResult.data?.length) setBrands(brandsResult.data as Brand[]);
     });
