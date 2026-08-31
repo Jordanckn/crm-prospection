@@ -106,7 +106,11 @@ Deno.serve(async (req: Request) => {
         senderQuery = senderQuery.eq('country', country);
         routing = 'contact_country';
       } else {
-        return respond({ error: "Choisissez explicitement l'expediteur France ou Israel pour une adresse saisie manuellement." }, 400);
+        // Compatibilite temporaire avec l'ancienne interface Netlify, qui ne transmet
+        // pas encore sender_code. Une saisie libre utilise la France par defaut ; le
+        // choix explicite de la nouvelle interface restera toujours prioritaire.
+        senderQuery = senderQuery.eq('country', 'France');
+        routing = 'legacy_manual_default_france';
       }
       const { data: configuredSender, error: senderError } = await senderQuery.maybeSingle();
       if (senderError) throw senderError;

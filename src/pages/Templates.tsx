@@ -199,6 +199,10 @@ export default function Templates() {
 
   const handleSendEmail = async () => {
     if (!previewTemplate || !sendTo) return;
+    if (brand.code === 'epiderme_ai' && !sendSenderCode) {
+      setSendResult({ success: false, message: "Choisissez l'expéditeur France ou Israël avant l'envoi." });
+      return;
+    }
     setSending(true);
     setSendResult(null);
     try {
