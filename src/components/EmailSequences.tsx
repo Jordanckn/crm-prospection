@@ -72,15 +72,15 @@ export default function EmailSequences() {
     target_country: 'France' as 'France' | 'Israël',
   });
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [brand.id]);
 
   const loadData = async () => {
     try {
       const [seqRes, tplRes, cRes, enrRes] = await Promise.all([
-        supabase.from('email_sequences').select('*').order('created_at', { ascending: false }),
-        supabase.from('templates').select('*').eq('type', 'Email').order('titre'),
-        supabase.from('contacts').select('*').order('nom'),
-        supabase.from('email_sequence_enrollments').select('*, contacts(*)').order('created_at', { ascending: false }),
+        supabase.from('email_sequences').select('*').eq('brand_id', brand.id).order('created_at', { ascending: false }),
+        supabase.from('templates').select('*').eq('brand_id', brand.id).eq('type', 'Email').order('titre'),
+        supabase.from('contacts').select('*').eq('brand_id', brand.id).order('nom'),
+        supabase.from('email_sequence_enrollments').select('*, contacts(*)').eq('brand_id', brand.id).order('created_at', { ascending: false }),
       ]);
       setSequences(seqRes.data || []);
       setTemplates(tplRes.data || []);

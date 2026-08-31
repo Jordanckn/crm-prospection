@@ -31,30 +31,38 @@ const BrandContext = createContext<BrandContextValue>({
 
 export function BrandProvider({ profile, children }: { profile: Profile | null; children: ReactNode }) {
   const [brands, setBrands] = useState<Brand[]>([WEBFITYOU]);
+  const [activeBrandId, setActiveBrandId] = useState(profile?.active_brand_id || WEBFITYOU.id);
   const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
-    if (!profile || import.meta.env.VITE_MULTI_USER_ENABLED !== 'true') return;
-    supabase.from('brands').select('id, code, name, logo_url, accent_color, email_provider, from_name, from_email, reply_to, unsubscribe_email')
-      .order('name')
-      .then(({ data, error }) => {
-        if (!error && data?.length) setBrands(data as Brand[]);
-      });
+    if (!profile) return;
+    let cancelled = false;
+    Promise.all([
+      supabase.from('profiles').select('active_brand_id').eq('id', profile.id).maybeSingle(),
+      supabase.from('brands').select('id, code, name, logo_url, accent_color, email_provider, from_name, from_email, reply_to, unsubscribe_email').order('name'),
+    ]).then(([profileResult, brandsResult]) => {
+      if (cancelled) return;
+      const freshActiveBrandId = profileResult.data?.active_brand_id || profile.active_brand_id;
+      setActiveBrandId(freshActiveBrandId);
+      if (!brandsResult.error && brandsResult.data?.length) setBrands(brandsResult.data as Brand[]);
+    });
+    return () => { cancelled = true; };
   }, [profile]);
 
   const brand = useMemo(
-    () => brands.find(item => item.id === profile?.active_brand_id) || brands[0] || WEBFITYOU,
-    [brands, profile?.active_brand_id],
+    () => brands.find(item => item.id === activeBrandId) || brands.find(item => item.id === profile?.active_brand_id) || brands[0] || WEBFITYOU,
+    [activeBrandId, brands, profile?.active_brand_id],
   );
 
   const switchBrand = async (code: string) => {
     if (code === brand.code || switching) return;
     setSwitching(true);
-    const { error } = await supabase.rpc('switch_active_brand', { p_brand_code: code });
+    const { data, error } = await supabase.rpc('switch_active_brand', { p_brand_code: code });
     if (error) {
       setSwitching(false);
       throw error;
     }
+    if (data?.id) setActiveBrandId(data.id);
     // Recharge toutes les vues afin qu'aucun etat de l'espace precedent ne subsiste.
     window.location.reload();
   };

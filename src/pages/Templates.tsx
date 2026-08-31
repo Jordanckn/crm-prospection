@@ -84,15 +84,15 @@ export default function Templates() {
     actif: false,
   });
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [brand.id]);
 
   const loadData = async () => {
     try {
       const [templatesRes, scriptsRes, contactsRes, sendersRes] = await Promise.all([
-        supabase.from('templates').select('*').order('created_at', { ascending: false }),
-        supabase.from('scripts_phoning').select('*').order('created_at', { ascending: false }),
-        supabase.from('contacts').select('*').order('nom', { ascending: true }),
-        supabase.from('brand_email_senders').select('code, country, from_name, from_email').eq('active', true).order('country'),
+        supabase.from('templates').select('*').eq('brand_id', brand.id).order('created_at', { ascending: false }),
+        supabase.from('scripts_phoning').select('*').eq('brand_id', brand.id).order('created_at', { ascending: false }),
+        supabase.from('contacts').select('*').eq('brand_id', brand.id).order('nom', { ascending: true }),
+        supabase.from('brand_email_senders').select('code, country, from_name, from_email').eq('brand_id', brand.id).eq('active', true).order('country'),
       ]);
       setTemplates(templatesRes.data || []);
       setScripts(scriptsRes.data || []);

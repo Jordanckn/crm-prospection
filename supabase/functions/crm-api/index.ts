@@ -376,6 +376,10 @@ async function route(
 
   if (resource === "contacts" && method === "POST" && !id) {
     requirePermission(actor, "contacts:write");
+    const requestedCountry = asString(body.pays, 80).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (actor.brandCode === "webfityou" && ["israel", "il"].includes(requestedCountry)) {
+      throw new ApiError(400, "Les contacts Israël doivent être créés dans l'espace Epiderme AI.");
+    }
     const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId, actor.brandId);
     const payload = {
       prenom: asString(body.prenom, 120), nom: asString(body.nom, 120), email: asString(body.email, 320),
@@ -399,6 +403,12 @@ async function route(
 
   if (resource === "contacts" && method === "PATCH" && id) {
     requirePermission(actor, "contacts:write");
+    if (body.pays !== undefined) {
+      const requestedCountry = asString(body.pays, 80).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (actor.brandCode === "webfityou" && ["israel", "il"].includes(requestedCountry)) {
+        throw new ApiError(400, "Un contact Israël doit être déplacé ou créé dans l'espace Epiderme AI.");
+      }
+    }
     const allowed = ["prenom", "nom", "email", "telephone", "entreprise", "statut", "pays", "secteur_activite", "adresse", "ville", "code_postal", "notes_entreprise", "site_web", "instagram", "facebook", "linkedin", "twitter"];
     const updates: Record<string, unknown> = {};
     for (const field of allowed) if (body[field] !== undefined) updates[field] = asString(body[field], field === "notes_entreprise" ? 10_000 : 500);

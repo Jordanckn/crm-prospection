@@ -14,6 +14,7 @@ import ContactSidePanel from '../components/ContactSidePanel';
 import SirenEnrichButton from '../components/SirenEnrichButton';
 import type { SirenResult } from '../lib/siren';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useBrand } from '../contexts/BrandContext';
 
 const STATUTS = ['Nouveau', 'En cours', 'Converti', 'Perdu'] as const;
 const TAGS_DISPONIBLES = ['Client', 'Prospect', 'Partenaire', 'VIP', 'Prioritaire', 'À relancer'];
@@ -117,6 +118,7 @@ type ContactsProps = {
 
 export default function Contacts({ onOpenContact, editTarget, onEditTargetHandled, profileId }: ContactsProps = {}) {
   const { canModify, canDelete } = usePermissions();
+  const { brand } = useBrand();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -155,7 +157,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   const [formData, setFormData] = useState({ ...emptyForm });
   const [secteurGroupe, setSecteurGroupe] = useState(SECTEUR_GROUPS[0].label);
 
-  useEffect(() => { loadContacts(); }, []);
+  useEffect(() => { loadContacts(); }, [brand.id]);
 
   useEffect(() => {
     const storageKey = `crm-contact-column-order:${profileId || 'default'}`;
@@ -242,8 +244,8 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   const loadContacts = async () => {
     try {
       const [{ data, error }, { data: docs }] = await Promise.all([
-        supabase.from('contacts').select('*').order('created_at', { ascending: false }),
-        supabase.from('contact_documents').select('contact_id'),
+        supabase.from('contacts').select('*').eq('brand_id', brand.id).order('created_at', { ascending: false }),
+        supabase.from('contact_documents').select('contact_id').eq('brand_id', brand.id),
       ]);
       if (error) throw error;
       setContacts(data || []);
@@ -295,7 +297,10 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const payload = { ...formData };
+      if (brand.code === 'webfityou' && formData.pays === 'Israël') {
+        throw new Error('Les contacts Israël doivent être créés dans l’espace Epiderme AI.');
+      }
+      const payload = { ...formData, brand_id: brand.id };
       if (editingContact) {
         const oldAddr = [editingContact.adresse, editingContact.code_postal, editingContact.ville].join('');
         const newAddr = [formData.adresse, formData.code_postal, formData.ville].join('');
@@ -893,7 +898,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Pays *</label>
                   <select value={formData.pays} onChange={e => setFormData({ ...formData, pays: e.target.value as Contact['pays'] })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
-                    {PAYS.map(p => <option key={p} value={p}>{getPaysFlag(p)} {p}</option>)}
+                    {(brand.code === 'webfityou' ? ['France'] as const : PAYS).map(p => <option key={p} value={p}>{getPaysFlag(p)} {p}</option>)}
                   </select>
                 </div>
                 <div>
