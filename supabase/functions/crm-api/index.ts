@@ -84,6 +84,14 @@ function asStringArray(value: unknown, max = 500): string[] {
   return [...new Set(value.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean))].slice(0, max);
 }
 
+function epidermeCountry(value: unknown, fallback?: "France" | "Israël"): "France" | "Israël" {
+  const country = asString(value, 80).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (!country && fallback) return fallback;
+  if (["israel", "il"].includes(country)) return "Israël";
+  if (["france", "fr"].includes(country)) return "France";
+  throw new ApiError(400, "Pour Epiderme AI, le pays doit être exactement France ou Israël afin de sélectionner le bon expéditeur.");
+}
+
 function isoDate(value: unknown, field: string, nullable = true): string | null {
   if ((value === null || value === undefined || value === "") && nullable) return null;
   const date = new Date(String(value));
@@ -105,7 +113,7 @@ async function authenticate(service: SupabaseClient, req: Request): Promise<Acto
     if (data.expires_at && new Date(data.expires_at) <= new Date()) {
       throw new ApiError(401, "Cette clé API a expiré.");
     }
-    void service.from("api_clients").update({ last_used_at: new Date().toISOString() }).eq("id", data.id);
+    await service.from("api_clients").update({ last_used_at: new Date().toISOString() }).eq("id", data.id);
     return {
       kind: "api_client",
       clientId: data.id,
@@ -165,6 +173,20 @@ async function audit(
   entityId?: string,
 ) {
   const requestId = req.headers.get("X-Request-Id") || req.headers.get("Idempotency-Key") || crypto.randomUUID();
+  const auditPayload = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...(payload as Record<string, unknown>) }
+    : {};
+  const responseData = result.body && typeof result.body === "object" && !Array.isArray(result.body)
+    ? (result.body as Record<string, unknown>).data
+    : null;
+  const responseRecord = responseData && typeof responseData === "object" && !Array.isArray(responseData)
+    ? responseData as Record<string, unknown>
+    : null;
+  const resolvedUserId = responseRecord?.user_id || responseRecord?.assigned_to ||
+    auditPayload.user_id || auditPayload.assigned_to || actor.defaultUserId || actor.adminUserId;
+  if (typeof resolvedUserId === "string" && resolvedUserId) {
+    auditPayload._resolved_user_id = resolvedUserId;
+  }
   await service.from("agent_audit_logs").insert({
     request_id: requestId,
     client_id: actor.clientId,
@@ -172,7 +194,7 @@ async function audit(
     action,
     entity_type: entityType,
     entity_id: entityId || null,
-    payload: payload || {},
+    payload: auditPayload,
     result: { status: result.status, success: result.status < 400 },
     ip_address: (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || null,
     brand_id: actor.brandId,
@@ -255,7 +277,15 @@ async function route(
   }
 
   if (method === "GET" && resource === "health") {
-    return { action: "api.health", result: ok({ status: "ok", actor: actor.name, brand: { code: actor.brandCode, name: actor.brandName }, time: new Date().toISOString() }) };
+    return { action: "api.health", result: ok({
+      status: "ok", actor: actor.name, brand: { code: actor.brandCode, name: actor.brandName },
+      ...(actor.brandCode === "epiderme_ai" ? { email_routing: {
+        rule: "Le pays du contact décide automatiquement de l'identité d'envoi.",
+        France: { identity: "Epiderme AI", from_email: "contact@epiderme-ai.com" },
+        "Israël": { identity: "Epiderm AI", from_email: "contact@epiderm-ai.com" },
+      } } : {}),
+      time: new Date().toISOString(),
+    }) };
   }
 
   if (resource === "clients") {
@@ -351,7 +381,8 @@ async function route(
       prenom: asString(body.prenom, 120), nom: asString(body.nom, 120), email: asString(body.email, 320),
       telephone: asString(body.telephone, 80), entreprise: asString(body.entreprise, 200),
       statut: ["Nouveau", "En cours", "Converti", "Perdu"].includes(asString(body.statut, 30)) ? body.statut : "Nouveau",
-      pays: asString(body.pays, 80) || "France", secteur_activite: asString(body.secteur_activite, 160),
+      interet: ["Intéressé", "Non intéressé"].includes(asString(body.interet, 30)) ? body.interet : "",
+      pays: actor.brandCode === "epiderme_ai" ? epidermeCountry(body.pays, "France") : (asString(body.pays, 80) || "France"), secteur_activite: asString(body.secteur_activite, 160),
       adresse: asString(body.adresse, 300), ville: asString(body.ville, 120), code_postal: asString(body.code_postal, 30),
       notes_entreprise: asString(body.notes_entreprise), tags: asStringArray(body.tags, 50),
       site_web: asString(body.site_web, 500),
@@ -371,6 +402,12 @@ async function route(
     const allowed = ["prenom", "nom", "email", "telephone", "entreprise", "statut", "pays", "secteur_activite", "adresse", "ville", "code_postal", "notes_entreprise", "site_web", "instagram", "facebook", "linkedin", "twitter"];
     const updates: Record<string, unknown> = {};
     for (const field of allowed) if (body[field] !== undefined) updates[field] = asString(body[field], field === "notes_entreprise" ? 10_000 : 500);
+    if (body.pays !== undefined && actor.brandCode === "epiderme_ai") updates.pays = epidermeCountry(body.pays);
+    if (body.interet !== undefined) {
+      const interet = asString(body.interet, 30);
+      if (!["", "Intéressé", "Non intéressé"].includes(interet)) throw new ApiError(400, "Intérêt invalide.");
+      updates.interet = interet;
+    }
     if (body.x !== undefined && body.twitter === undefined) updates.twitter = asString(body.x, 500);
     if (body.tags !== undefined) updates.tags = asStringArray(body.tags, 50);
     if (body.assigned_to !== undefined) {
@@ -406,6 +443,11 @@ async function route(
     if (body.task) requirePermission(actor, "tasks:write");
     const assignedTo = await requireActiveUser(service, asString(body.assigned_to, 60) || actor.defaultUserId, actor.brandId);
     const contactPayload = { ...asObject(body.contact), _brand_id: actor.brandId };
+    if (actor.brandCode === "epiderme_ai") {
+      if (contactPayload.pays !== undefined || !asString(body.contact_id, 60)) {
+        contactPayload.pays = epidermeCountry(contactPayload.pays, "France");
+      }
+    }
     const { data, error } = await service.rpc("crm_agent_record_followup", {
       p_contact_id: asString(body.contact_id, 60) || null,
       p_contact: contactPayload,
@@ -539,10 +581,12 @@ async function route(
 
   if (resource === "audit" && method === "GET") {
     requirePermission(actor, "audit:read");
-    const limit = integer(url.searchParams.get("limit"), 50, 1, 200);
-    let query = service.from("agent_audit_logs").select("id, request_id, client_id, admin_user_id, action, entity_type, entity_id, result, created_at");
+    const limit = integer(url.searchParams.get("limit"), 200, 1, 1000);
+    let query = service.from("agent_audit_logs").select("id, request_id, client_id, admin_user_id, action, entity_type, entity_id, payload, result, created_at");
     query = query.eq("brand_id", actor.brandId);
     if (url.searchParams.get("client_id")) query = query.eq("client_id", url.searchParams.get("client_id"));
+    if (url.searchParams.get("from")) query = query.gte("created_at", isoDate(url.searchParams.get("from"), "from", false)!);
+    if (url.searchParams.get("to")) query = query.lte("created_at", isoDate(url.searchParams.get("to"), "to", false)!);
     const { data, error } = await query.order("created_at", { ascending: false }).limit(limit);
     if (error) throw error;
     return { action: "audit.list", entityType: "audit", result: ok(data || []) };

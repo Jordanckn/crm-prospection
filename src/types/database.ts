@@ -23,6 +23,7 @@ export type Contact = {
   entreprise: string;
   tags: string[];
   statut: 'Nouveau' | 'En cours' | 'Converti' | 'Perdu';
+  interet: '' | 'Intéressé' | 'Non intéressé';
   pays: 'France' | 'Israël';
   secteur_activite: string;
   adresse: string;
@@ -56,7 +57,7 @@ export type Interaction = {
   type: 'Appel' | 'Email' | 'WhatsApp' | 'SMS' | 'Facebook' | 'Instagram';
   date_heure: string;
   duree: number;
-  resultat: 'Pas de réponse' | 'Répondu' | 'Intéressé' | 'Non intéressé' | 'Relance' | '';
+  resultat: 'Pas de réponse' | 'Répondu' | 'Intéressé' | 'Non intéressé' | 'Relance' | 'Envoyé' | '';
   notes: string;
   created_at: string;
   user_id: string;
@@ -95,6 +96,7 @@ export type Profile = {
   active: boolean;
   manager_id: string | null;
   active_brand_id: string;
+  timezone: string;
   created_at: string;
   updated_at: string;
 };

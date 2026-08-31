@@ -40,6 +40,17 @@ openclaw mcp add epiderme-ai-crm \
 
 Les deux clés sont distinctes : une erreur de sélection par OpenClaw ne peut donc pas contaminer l'autre espace.
 
+## Règle Epiderme / Epiderm
+
+Dans l'espace CRM Epiderme AI, chaque contact doit avoir l'un de ces deux pays :
+
+- `France` utilise **Epiderme AI** (avec le `e` final) et `contact@epiderme-ai.com`.
+- `Israël` utilise **Epiderm AI** (sans le `e` final) et `contact@epiderm-ai.com`.
+
+OpenClaw ne choisit jamais l'expéditeur lui-même. Il renseigne correctement le pays ;
+le serveur sélectionne ensuite automatiquement la bonne identité et la bonne clé Resend.
+Un pays absent ou invalide bloque l'envoi automatique au lieu de risquer un mélange.
+
 Les outils `crm_create_contact`, `crm_update_contact` et `crm_record_followup`
 acceptent les champs `instagram`, `facebook`, `linkedin` et `twitter` (X).
 

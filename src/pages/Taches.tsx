@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 import type { Tache, Contact } from '../types/database';
 import RelanceTimeline, { ETAPES_CONFIG, RelanceEtape } from '../components/RelanceTimeline';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { dateKeyInTimezone, formatInTimezone, safeTimezone, toZonedDateTimeInput, zonedDateTimeInputToIso } from '../lib/timezone';
 
 type TacheWithContact = Tache & { contacts?: Contact | null };
 
@@ -26,15 +27,16 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
-function isToday(dateStr: string): boolean {
-  return dateStr === new Date().toISOString().split('T')[0];
+function isToday(dateStr: string, timezone: string): boolean {
+  return dateStr === dateKeyInTimezone(new Date(), timezone);
 }
 
-function isPast(dateStr: string): boolean {
-  return dateStr < new Date().toISOString().split('T')[0];
+function isPast(dateStr: string, timezone: string): boolean {
+  return dateStr < dateKeyInTimezone(new Date(), timezone);
 }
 
-export default function Taches() {
+export default function Taches({ timezone: requestedTimezone }: { timezone?: string }) {
+  const timezone = safeTimezone(requestedTimezone);
   const { canModify, canDelete } = usePermissions();
   const [taches, setTaches] = useState<TacheWithContact[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -46,7 +48,7 @@ export default function Taches() {
   const [activeTab, setActiveTab] = useState<'taches' | 'relances'>('taches');
   const [showRelanceModal, setShowRelanceModal] = useState(false);
   const [relanceContactId, setRelanceContactId] = useState('');
-  const [relanceInteractionDate, setRelanceInteractionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [relanceInteractionDate, setRelanceInteractionDate] = useState(dateKeyInTimezone(new Date(), timezone));
 
   const [formData, setFormData] = useState({
     contact_id: '', titre: '', description: '', date_echeance: '',
@@ -86,8 +88,8 @@ export default function Taches() {
           jours: JOURS_PAR_ETAPE[r.etape],
           date_relance: dateStr,
           statut: r.statut,
-          isPast: isPast(dateStr),
-          isToday: isToday(dateStr),
+          isPast: isPast(dateStr, timezone),
+          isToday: isToday(dateStr, timezone),
         });
       }
       // Sort etapes inside each group
@@ -97,7 +99,7 @@ export default function Taches() {
       setRelanceGroups(Array.from(map.values()));
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, []);
+  }, [timezone]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -109,12 +111,16 @@ export default function Taches() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const payload = { ...formData, contact_id: formData.contact_id || null, date_echeance: formData.date_echeance || null };
-      if (editingTache) {
-        await supabase.from('taches').update(payload).eq('id', editingTache.id);
-      } else {
-        await supabase.from('taches').insert([payload]);
-      }
+      const { error } = await supabase.rpc('save_task_local_time', {
+        p_task_id: editingTache?.id || null,
+        p_contact_id: formData.contact_id || null,
+        p_titre: formData.titre,
+        p_description: formData.description,
+        p_local_datetime: formData.date_echeance || null,
+        p_timezone: timezone,
+        p_statut: formData.statut,
+      });
+      if (error) throw error;
       setShowModal(false); resetForm(); loadData();
     } catch (err) { console.error(err); }
   };
@@ -125,7 +131,7 @@ export default function Taches() {
       contact_id: t.contact_id || '',
       titre: t.titre,
       description: t.description,
-      date_echeance: t.date_echeance ? new Date(t.date_echeance).toISOString().slice(0, 16) : '',
+      date_echeance: t.date_echeance ? toZonedDateTimeInput(t.date_echeance, timezone) : '',
       statut: t.statut,
     });
     setShowModal(true);
@@ -164,7 +170,7 @@ export default function Taches() {
         contact_id: r.contact_id,
         titre: `Relance ${ETAPES_CONFIG.find(c => c.etape === r.etape)?.label} — ${contactObj.prenom} ${contactObj.nom}`,
         description: `Relance automatique étape ${r.etape} (${ETAPES_CONFIG.find(c => c.etape === r.etape)?.label})`,
-        date_echeance: new Date(r.date_relance + 'T09:00:00').toISOString(),
+        date_echeance: zonedDateTimeInputToIso(r.date_relance + 'T09:00', timezone),
         statut: 'En attente',
       }));
       await supabase.from('taches').insert(tacheRows);
@@ -192,7 +198,7 @@ export default function Taches() {
 
   const fmtDate = (d: string | null) => {
     if (!d) return 'Pas de date';
-    return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return formatInTimezone(d, timezone, { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
   const isOverdue = (d: string | null) => !!d && new Date(d) < new Date();
 
@@ -436,7 +442,7 @@ export default function Taches() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Date d'échéance</label>
+                <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Date d'échéance <span className="normal-case font-normal text-slate-400">({timezone})</span></label>
                 <input type="datetime-local" value={formData.date_echeance} onChange={e => setFormData({ ...formData, date_echeance: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
               <div>

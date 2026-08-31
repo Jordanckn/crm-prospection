@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { Template, ScriptPhoning, Contact } from '../types/database';
 import EmailSequences from '../components/EmailSequences';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useBrand } from '../contexts/BrandContext';
 
 const TYPES = ['Email', 'WhatsApp', 'SMS'] as const;
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
@@ -46,6 +47,7 @@ function replaceVariables(content: string, vars: Record<string, string>): string
 
 export default function Templates() {
   const { canModify, canDelete } = usePermissions();
+  const { brand } = useBrand();
   const [mainTab, setMainTab] = useState<'templates' | 'sequences'>('templates');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [scripts, setScripts] = useState<ScriptPhoning[]>([]);
@@ -65,6 +67,8 @@ export default function Templates() {
   const [sendAttachment, setSendAttachment] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [emailSenders, setEmailSenders] = useState<Array<{ code: string; country: string; from_name: string; from_email: string }>>([]);
+  const [sendSenderCode, setSendSenderCode] = useState('');
 
   const [templateForm, setTemplateForm] = useState({
     titre: '',
@@ -84,14 +88,16 @@ export default function Templates() {
 
   const loadData = async () => {
     try {
-      const [templatesRes, scriptsRes, contactsRes] = await Promise.all([
+      const [templatesRes, scriptsRes, contactsRes, sendersRes] = await Promise.all([
         supabase.from('templates').select('*').order('created_at', { ascending: false }),
         supabase.from('scripts_phoning').select('*').order('created_at', { ascending: false }),
         supabase.from('contacts').select('*').order('nom', { ascending: true }),
+        supabase.from('brand_email_senders').select('code, country, from_name, from_email').eq('active', true).order('country'),
       ]);
       setTemplates(templatesRes.data || []);
       setScripts(scriptsRes.data || []);
       setContacts(contactsRes.data || []);
+      setEmailSenders(sendersRes.data || []);
     } catch (error) { console.error(error); }
     finally { setLoading(false); }
   };
@@ -176,6 +182,7 @@ export default function Templates() {
     setSendTo('');
     setSendContactId('');
     setSendAttachment(null);
+    setSendSenderCode(emailSenders.find(sender => sender.country === 'France')?.code || '');
     setSendResult(null);
     setShowSendModal(true);
   };
@@ -217,24 +224,14 @@ export default function Templates() {
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
           text: isHtml ? undefined : html,
           attachment,
+          contact_id: sendContactId || undefined,
+          sender_code: brand.code === 'epiderme_ai' ? sendSenderCode : undefined,
         }),
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
-        setSendResult({ success: true, message: 'Email envoye avec succes !' });
-        // Log interaction
-        if (sendContactId) {
-          await supabase.from('interactions').insert([{
-            contact_id: sendContactId,
-            type: 'Email',
-            date_heure: new Date().toISOString(),
-            duree: 0,
-            resultat: '',
-            notes: `Email envoye : ${sendSubject}${sendAttachment ? ` (PJ : ${sendAttachment.name})` : ''}`,
-          }]);
-          await supabase.from('contacts').update({ derniere_interaction: new Date().toISOString() }).eq('id', sendContactId);
-        }
+        setSendResult({ success: true, message: `Email envoyé avec succès depuis ${data.sender?.name || brand.name} <${data.sender?.email || brand.from_email}>.` });
       } else {
         setSendResult({ success: false, message: data.error || 'Erreur lors de l\'envoi' });
       }
@@ -250,7 +247,13 @@ export default function Templates() {
   const handleContactSelect = (id: string) => {
     setSendContactId(id);
     const c = contacts.find(ct => ct.id === id);
-    if (c && c.email) setSendTo(c.email);
+    if (c && c.email) {
+      setSendTo(c.email);
+      if (brand.code === 'epiderme_ai') {
+        const senderCountry = c.pays === 'Israël' ? 'Israël' : 'France';
+        setSendSenderCode(emailSenders.find(sender => sender.country === senderCountry)?.code || '');
+      }
+    }
   };
 
   if (loading) {
@@ -656,7 +659,7 @@ export default function Templates() {
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-slate-900">Envoyer un email</h2>
-                  <p className="text-xs text-slate-500">depuis contact@webfityou.com</p>
+                  <p className="text-xs text-slate-500">depuis {brand.code === 'epiderme_ai' ? (emailSenders.find(sender => sender.code === sendSenderCode)?.from_email || 'expéditeur à sélectionner') : brand.from_email}</p>
                 </div>
               </div>
               <button onClick={() => { setShowSendModal(false); setSendResult(null); }} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X className="w-4 h-4" /></button>
@@ -676,6 +679,16 @@ export default function Templates() {
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Destinataire *</label>
                 <input type="email" required value={sendTo} onChange={e => setSendTo(e.target.value)} placeholder="email@exemple.com" className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
+              {brand.code === 'epiderme_ai' && (
+                <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-violet-700">Expéditeur Resend *</label>
+                  <select required value={sendSenderCode} onChange={event => setSendSenderCode(event.target.value)} className="w-full rounded-xl border border-violet-200 bg-white px-3 py-2.5 text-sm">
+                    <option value="">Choisir France ou Israël…</option>
+                    {emailSenders.map(sender => <option key={sender.code} value={sender.code}>{sender.country === 'Israël' ? '🇮🇱' : '🇫🇷'} {sender.from_name} — {sender.from_email}</option>)}
+                  </select>
+                  <p className="mt-1.5 text-[11px] text-violet-700">Présélection automatique selon le pays du contact. Vous pouvez la modifier pour un envoi manuel.</p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Objet *</label>
                 <input type="text" required value={sendSubject} onChange={e => setSendSubject(e.target.value)} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />

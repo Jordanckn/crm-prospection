@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowLeft, Phone, Mail, MailX, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, MailX, Building2, MapPin, Globe, Instagram, Facebook, Linkedin, Twitter, Clock, Trash2, CheckSquare, FileText, Upload, Download, ExternalLink, X, CreditCard as Edit3, Check, MessageCircle, Calendar, AlertTriangle, Eye, Sparkles, UserRound } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Contact, Interaction, Tache, ContactDocument } from '../types/database';
+import type { Contact, Interaction, Tache, ContactDocument, Profile } from '../types/database';
 import { usePermissions } from '../contexts/PermissionsContext';
 import QuickInteractionModal from '../components/QuickInteractionModal';
 import ContactAddressMap from '../components/ContactAddressMap';
@@ -10,6 +10,7 @@ import AiEnrichModal from '../components/AiEnrichModal';
 import PageSpeedPanel from '../components/PageSpeedPanel';
 import type { SirenResult } from '../lib/siren';
 import { useBrand } from '../contexts/BrandContext';
+import { formatInTimezone, safeTimezone, toZonedDateTimeInput } from '../lib/timezone';
 
 const STATUT_COLORS: Record<string, string> = {
   'Nouveau': 'bg-slate-100 text-slate-700 border-slate-300',
@@ -33,15 +34,16 @@ const RESULT_COLORS: Record<string, string> = {
   'Pas de réponse': 'bg-slate-100 text-slate-500',
   'Non intéressé': 'bg-red-50 text-red-700',
   'Relance': 'bg-amber-50 text-amber-700',
+  'Envoyé': 'bg-emerald-50 text-emerald-700',
 };
 
-function fmtDate(d: string | null) {
+function fmtDate(d: string | null, timezone: string) {
   if (!d) return '—';
-  return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+  return formatInTimezone(d, timezone, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function fmtDateTime(d: string) {
-  return new Date(d).toLocaleString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+function fmtDateTime(d: string, timezone: string) {
+  return formatInTimezone(d, timezone, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtSize(bytes: number) {
@@ -50,15 +52,30 @@ function fmtSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
-type Props = { contactId: string; onBack: () => void; onEdit: (c: Contact) => void };
+type Props = { contactId: string; onBack: () => void; onEdit: (c: Contact) => void; timezone?: string };
 
-export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
+type ContactSequenceEnrollment = {
+  id: string;
+  etape_courante: number;
+  statut: 'active' | 'completed' | 'cancelled';
+  execution_status: 'pending' | 'processing' | 'sent' | 'error' | 'completed' | 'cancelled';
+  prochaine_execution: string | null;
+  derniere_execution: string | null;
+  last_error: string | null;
+  sent_count: number;
+  email_sequences?: { titre: string; etapes: Array<{ delay_days: number }> } | null;
+};
+
+export default function ContactDetail({ contactId, onBack, onEdit, timezone: requestedTimezone }: Props) {
+  const timezone = safeTimezone(requestedTimezone);
   const { canModify, canDelete } = usePermissions();
   const { brand } = useBrand();
   const [contact, setContact] = useState<Contact | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [taches, setTaches] = useState<Tache[]>([]);
   const [documents, setDocuments] = useState<ContactDocument[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [sequenceEnrollments, setSequenceEnrollments] = useState<ContactSequenceEnrollment[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'apercu' | 'interactions' | 'taches' | 'documents'>('apercu');
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -82,16 +99,22 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
 
   const loadAll = async () => {
     setLoading(true);
-    const [{ data: c }, { data: i }, { data: t }, { data: d }] = await Promise.all([
+    const [{ data: c }, { data: i }, { data: t }, { data: d }, { data: p }, { data: sequences }] = await Promise.all([
       supabase.from('contacts').select('*').eq('id', contactId).maybeSingle(),
       supabase.from('interactions').select('*').eq('contact_id', contactId).order('date_heure', { ascending: false }),
       supabase.from('taches').select('*').eq('contact_id', contactId).order('date_echeance', { ascending: true }),
       supabase.from('contact_documents').select('*').eq('contact_id', contactId).order('created_at', { ascending: false }),
+      supabase.from('profiles').select('*').order('full_name'),
+      supabase.from('email_sequence_enrollments')
+        .select('id, etape_courante, statut, execution_status, prochaine_execution, derniere_execution, last_error, sent_count, email_sequences(titre, etapes)')
+        .eq('contact_id', contactId).order('created_at', { ascending: false }),
     ]);
     if (c) setContact(c);
     setInteractions(i || []);
     setTaches(t || []);
     setDocuments(d || []);
+    setProfiles(p || []);
+    setSequenceEnrollments((sequences || []) as unknown as ContactSequenceEnrollment[]);
     setLoading(false);
   };
 
@@ -158,12 +181,22 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
 
   const openEditInteraction = (i: Interaction) => {
     setEditingInteraction(i);
-    setIForm({ type: i.type, date_heure: new Date(i.date_heure).toISOString().slice(0, 16), duree: i.duree || 0, resultat: i.resultat || '', notes: i.notes || '' });
+    setIForm({ type: i.type, date_heure: toZonedDateTimeInput(i.date_heure, timezone), duree: i.duree || 0, resultat: i.resultat || '', notes: i.notes || '' });
   };
 
   const saveInteraction = async () => {
     if (!editingInteraction) return;
-    await supabase.from('interactions').update(iForm).eq('id', editingInteraction.id);
+    const { error } = await supabase.rpc('save_interaction_local_time', {
+      p_interaction_id: editingInteraction.id,
+      p_contact_id: editingInteraction.contact_id,
+      p_type: iForm.type,
+      p_local_datetime: iForm.date_heure,
+      p_timezone: timezone,
+      p_duree: iForm.duree,
+      p_resultat: iForm.resultat,
+      p_notes: iForm.notes,
+    });
+    if (error) return;
     setEditingInteraction(null);
     loadAll();
   };
@@ -176,12 +209,21 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
 
   const openEditTache = (t: Tache) => {
     setEditingTache(t);
-    setTForm({ titre: t.titre, description: t.description || '', date_echeance: t.date_echeance ? new Date(t.date_echeance).toISOString().slice(0, 16) : '', statut: t.statut });
+    setTForm({ titre: t.titre, description: t.description || '', date_echeance: t.date_echeance ? toZonedDateTimeInput(t.date_echeance, timezone) : '', statut: t.statut });
   };
 
   const saveTache = async () => {
     if (!editingTache) return;
-    await supabase.from('taches').update({ ...tForm, date_echeance: tForm.date_echeance || null }).eq('id', editingTache.id);
+    const { error } = await supabase.rpc('save_task_local_time', {
+      p_task_id: editingTache.id,
+      p_contact_id: editingTache.contact_id,
+      p_titre: tForm.titre,
+      p_description: tForm.description,
+      p_local_datetime: tForm.date_echeance || null,
+      p_timezone: timezone,
+      p_statut: tForm.statut,
+    });
+    if (error) return;
     setEditingTache(null);
     loadAll();
   };
@@ -235,6 +277,8 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
     );
   }
 
+  const owner = profiles.find(profile => profile.id === contact.assigned_to);
+
   const initials = `${contact.prenom?.[0] || ''}${contact.nom?.[0] || ''}`.toUpperCase();
   const tachesEnAttente = taches.filter(t => t.statut === 'En attente');
 
@@ -261,6 +305,9 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
             <div className="flex items-center gap-2 pt-12">
               <span className={`px-3 py-1 text-xs font-semibold rounded-full border ${STATUT_COLORS[contact.statut]}`}>
                 {contact.statut}
+              </span>
+              <span className={`px-3 py-1 text-xs font-semibold rounded-full border ${contact.interet === 'Intéressé' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : contact.interet === 'Non intéressé' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                {contact.interet || 'À qualifier'}
               </span>
               <button
                 onClick={() => setShowQuickModal(true)}
@@ -308,6 +355,10 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
             {contact.secteur_activite && (
               <p className="text-sm text-slate-400 mt-0.5 ml-5">{contact.secteur_activite}</p>
             )}
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+              <UserRound className="h-3.5 w-3.5 text-slate-400" />
+              Responsable : <span className="font-semibold text-slate-700">{owner?.full_name || owner?.email || 'Non attribué'}</span>
+            </p>
           </div>
 
           {/* Tags */}
@@ -325,7 +376,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
               { value: interactions.length, label: 'Interactions' },
               { value: tachesEnAttente.length, label: 'Tâches actives' },
               { value: documents.length, label: 'Documents' },
-              { value: fmtDate(contact.derniere_interaction), label: 'Dernière interaction', small: true },
+              { value: fmtDate(contact.derniere_interaction, timezone), label: 'Dernière interaction', small: true },
             ].map(({ value, label, small }) => (
               <div key={label} className="px-5 first:pl-0 text-center">
                 <p className={`font-bold text-slate-900 ${small ? 'text-base' : 'text-2xl'}`}>{value}</p>
@@ -362,6 +413,27 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
       {/* ── TAB: APERÇU ── */}
       {activeTab === 'apercu' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {sequenceEnrollments.length > 0 && (
+            <div className="lg:col-span-2 overflow-hidden rounded-2xl border border-violet-200 bg-white">
+              <div className="flex items-center gap-2 border-b border-violet-100 bg-violet-50 px-5 py-3">
+                <Mail className="h-4 w-4 text-violet-600" />
+                <h3 className="font-bold text-violet-900">Suivi des séquences email</h3>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {sequenceEnrollments.map(enrollment => {
+                  const labels = { pending: 'En attente', processing: 'En cours', sent: 'Envoyé', error: 'Erreur', completed: 'Terminé', cancelled: 'Annulé' } as const;
+                  const colors = { pending: 'bg-amber-50 text-amber-700', processing: 'bg-blue-50 text-blue-700', sent: 'bg-emerald-50 text-emerald-700', error: 'bg-red-50 text-red-700', completed: 'bg-violet-100 text-violet-700', cancelled: 'bg-slate-100 text-slate-500' } as const;
+                  const sequence = enrollment.email_sequences;
+                  return <div key={enrollment.id} className="flex flex-wrap items-center gap-4 px-5 py-3 text-sm">
+                    <div className="min-w-[220px] flex-1"><p className="font-semibold text-slate-900">{sequence?.titre || 'Séquence supprimée'}</p><p className="text-xs text-slate-400">Étape {Math.min(enrollment.etape_courante + 1, sequence?.etapes?.length || enrollment.etape_courante + 1)}/{sequence?.etapes?.length || '?'} · {enrollment.sent_count} envoyé(s)</p></div>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${colors[enrollment.execution_status]}`}>{labels[enrollment.execution_status]}</span>
+                    <div className="min-w-[210px] text-xs text-slate-500">{enrollment.prochaine_execution && enrollment.statut === 'active' ? <>Prochain envoi : <strong className="text-slate-700">{fmtDateTime(enrollment.prochaine_execution, timezone)}</strong></> : enrollment.derniere_execution ? <>Dernier envoi : {fmtDateTime(enrollment.derniere_execution, timezone)}</> : 'Aucun envoi'}</div>
+                    {enrollment.last_error && <p className="w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{enrollment.last_error}</p>}
+                  </div>;
+                })}
+              </div>
+            </div>
+          )}
           {/* Coordonnées */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6">
             <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
@@ -507,7 +579,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                     <span className={`px-2 py-0.5 rounded-md text-xs font-semibold border ${TYPE_COLORS[i.type]}`}>{i.type}</span>
                     <div className="flex-1 min-w-0">
                       {i.notes && <p className="text-xs text-slate-600 truncate">{i.notes}</p>}
-                      <p className="text-xs text-slate-400 mt-0.5">{fmtDateTime(i.date_heure)}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{fmtDateTime(i.date_heure, timezone)}</p>
                     </div>
                     {i.resultat && (
                       <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${RESULT_COLORS[i.resultat] || 'bg-slate-100 text-slate-600'}`}>
@@ -535,7 +607,9 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
               <MessageCircle className="w-12 h-12 mx-auto mb-3 text-slate-200" />
               <p className="text-slate-400 font-medium">Aucune interaction enregistrée</p>
             </div>
-          ) : interactions.map(i => (
+          ) : interactions.map(i => {
+            const author = profiles.find(profile => profile.id === i.user_id);
+            return (
             <div key={i.id} className="bg-white rounded-2xl border border-slate-200 hover:border-slate-300 transition-colors group">
               {editingInteraction?.id === i.id ? (
                 <div className="p-5 space-y-4">
@@ -548,7 +622,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-500 mb-1">Date et heure</label>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Date et heure <span className="font-normal">({timezone})</span></label>
                       <input type="datetime-local" value={iForm.date_heure} onChange={e => setIForm(f => ({ ...f, date_heure: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
                     <div>
@@ -587,7 +661,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                       )}
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      <span className="text-xs text-slate-400 whitespace-nowrap mr-1">{fmtDateTime(i.date_heure)}</span>
+                      <span className="text-xs text-slate-400 whitespace-nowrap mr-1">{fmtDateTime(i.date_heure, timezone)}</span>
                       {canModify && <button onClick={() => openEditInteraction(i)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Modifier">
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>}
@@ -601,10 +675,14 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                       {i.notes}
                     </p>
                   )}
+                  <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
+                    <UserRound className="h-3.5 w-3.5" />
+                    Créée par <span className="font-semibold text-slate-600">{author?.full_name || author?.email || 'Utilisateur inconnu'}</span>
+                  </p>
                 </div>
               )}
             </div>
-          ))}
+          );})}
         </div>
       )}
 
@@ -634,7 +712,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-500 mb-1">Échéance</label>
+                        <label className="block text-xs font-semibold text-slate-500 mb-1">Échéance <span className="font-normal text-slate-400">({timezone})</span></label>
                         <input type="datetime-local" value={tForm.date_echeance} onChange={e => setTForm(f => ({ ...f, date_echeance: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                       </div>
                       <div>
@@ -673,7 +751,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                           {t.date_echeance && (
                             <div className={`flex items-center gap-1 text-xs mt-1.5 ${overdue ? 'text-red-600 font-semibold' : 'text-slate-400'}`}>
                               <Calendar className="w-3 h-3" />
-                              {fmtDate(t.date_echeance)}
+                              {fmtDate(t.date_echeance, timezone)}
                               {overdue && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs ml-1">En retard</span>}
                             </div>
                           )}
@@ -746,7 +824,7 @@ export default function ContactDetail({ contactId, onBack, onEdit }: Props) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-sm text-slate-900 truncate">{doc.nom_fichier}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">{fmtSize(doc.taille_octets)} · Ajouté le {fmtDate(doc.created_at)}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{fmtSize(doc.taille_octets)} · Ajouté le {fmtDate(doc.created_at, timezone)}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <button

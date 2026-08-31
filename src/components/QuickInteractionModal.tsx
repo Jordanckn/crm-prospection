@@ -138,6 +138,7 @@ export default function QuickInteractionModal({ contact, initialDuration = 0, in
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          contact_id: contact.id,
           to: contact.email,
           subject: template.objet || template.titre,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
@@ -147,18 +148,8 @@ export default function QuickInteractionModal({ contact, initialDuration = 0, in
       const data = await res.json();
       if (res.ok && data.success) {
         setEmailSent('sent');
-        setType('Email');
-        setNotes((prev) => prev ? `${prev}\n[Email envoye: ${template.titre}]` : `[Email envoye: ${template.titre}]`);
-        // Auto-log the interaction
-        await supabase.from('interactions').insert([{
-          contact_id: contact.id,
-          type: 'Email',
-          date_heure: new Date().toISOString(),
-          duree: 0,
-          resultat: '',
-          notes: `Email envoye depuis template: ${template.titre}`,
-        }]);
-        await supabase.from('contacts').update({ derniere_interaction: new Date().toISOString() }).eq('id', contact.id);
+        const senderName = data.sender?.name || data.sender?.from_email || data.provider;
+        setNotes((prev) => prev ? `${prev}\n[Email envoyé via ${senderName}: ${template.titre}]` : `[Email envoyé via ${senderName}: ${template.titre}]`);
       } else {
         setEmailSent(data.error || 'Erreur envoi');
       }

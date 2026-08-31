@@ -35,6 +35,7 @@ const legacyProfile = (user: SessionUser): Profile => {
     active: true,
     manager_id: null,
     active_brand_id: '11111111-1111-4111-8111-111111111111',
+    timezone: 'Europe/Paris',
     created_at: now,
     updated_at: now,
   };
@@ -123,6 +124,7 @@ function App() {
             onOpenContact={navigateToContact}
             editTarget={editContactTarget}
             onEditTargetHandled={() => setEditContactTarget(null)}
+            profileId={profile?.id}
           />
         );
       case 'contact-detail':
@@ -131,12 +133,13 @@ function App() {
             contactId={selectedContactId}
             onBack={() => { setCurrentPage('contacts'); setSelectedContactId(null); }}
             onEdit={handleEditContact}
+            timezone={profile?.timezone}
           />
         ) : null;
       case 'interactions':
-        return <Interactions onOpenContact={navigateToContact} />;
+        return <Interactions onOpenContact={navigateToContact} timezone={profile?.timezone} profileId={profile?.id} />;
       case 'taches':
-        return <Taches />;
+        return <Taches timezone={profile?.timezone} />;
       case 'agenda':
         return <Agenda />;
       case 'templates':
@@ -146,7 +149,7 @@ function App() {
       case 'rapport':
         return <Rapport />;
       case 'pointage':
-        return <Pointage />;
+        return <Pointage timezone={profile?.timezone} />;
       case 'programmation-appels':
         return <ProgrammationAppels onOpenContact={navigateToContact} />;
       case 'administration':

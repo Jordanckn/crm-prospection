@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { dateKeyInTimezone, formatInTimezone, mondayKeyInTimezone, safeTimezone } from '../lib/timezone';
 
 type TypeSession = 'travail' | 'prospection';
 
@@ -26,26 +27,22 @@ function fmtDuration(minutes: number): string {
   return m > 0 ? `${h}h ${String(m).padStart(2, '0')}min` : `${h}h`;
 }
 
-function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+function fmtTime(iso: string, timezone: string): string {
+  return formatInTimezone(iso, timezone, { hour: '2-digit', minute: '2-digit' });
 }
 
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+function fmtDate(iso: string, timezone: string): string {
+  return formatInTimezone(iso, timezone, { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
 function liveMinutes(debut: string): number {
   return Math.floor((Date.now() - new Date(debut).getTime()) / 60000);
 }
 
-function todayIso(): string {
-  return new Date().toISOString().split('T')[0];
-}
-
-function groupByDate(sessions: Session[]): { date: string; items: Session[] }[] {
+function groupByDate(sessions: Session[], timezone: string): { date: string; items: Session[] }[] {
   const map = new Map<string, Session[]>();
   for (const s of sessions) {
-    const d = s.debut.split('T')[0];
+    const d = dateKeyInTimezone(s.debut, timezone);
     if (!map.has(d)) map.set(d, []);
     map.get(d)!.push(s);
   }
@@ -59,7 +56,8 @@ function pct(part: number, total: number): number {
   return Math.round((part / total) * 100);
 }
 
-export default function Pointage() {
+export default function Pointage({ timezone: requestedTimezone }: { timezone?: string }) {
+  const timezone = safeTimezone(requestedTimezone);
   const { canDelete } = usePermissions();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
@@ -88,10 +86,10 @@ export default function Pointage() {
     setActiveSession(running || null);
     if (running) setElapsed(liveMinutes(running.debut));
     // Expand today by default
-    const today = todayIso();
+    const today = dateKeyInTimezone(new Date(), timezone);
     setExpandedDates(new Set([today]));
     setLoading(false);
-  }, []);
+  }, [timezone]);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
@@ -108,7 +106,7 @@ export default function Pointage() {
 
   const upsertRecap = async (date: string, allSessions: Session[]) => {
     if (!userId) return;
-    const daySessions = allSessions.filter(s => s.debut.startsWith(date) && s.fin);
+    const daySessions = allSessions.filter(s => dateKeyInTimezone(s.debut, timezone) === date && s.fin);
     const minutes_travail = daySessions
       .filter(s => s.type_session === 'travail')
       .reduce((sum, s) => sum + (s.duree_minutes || 0), 0);
@@ -149,7 +147,7 @@ export default function Pointage() {
         s.id === activeSession.id ? { ...s, fin, duree_minutes: duree } : s
       );
       setSessions(updated);
-      await upsertRecap(activeSession.debut.split('T')[0], updated);
+      await upsertRecap(dateKeyInTimezone(activeSession.debut, timezone), updated);
       setActiveSession(null);
       setElapsed(0);
     }
@@ -160,7 +158,7 @@ export default function Pointage() {
     await supabase.from('sessions_travail').delete().eq('id', id);
     const updated = sessions.filter(s => s.id !== id);
     setSessions(updated);
-    if (s) await upsertRecap(s.debut.split('T')[0], updated);
+    if (s) await upsertRecap(dateKeyInTimezone(s.debut, timezone), updated);
     if (activeSession?.id === id) { setActiveSession(null); setElapsed(0); }
   };
 
@@ -179,10 +177,10 @@ export default function Pointage() {
     });
   };
 
-  const grouped = groupByDate(sessions);
-  const today = todayIso();
+  const grouped = groupByDate(sessions, timezone);
+  const today = dateKeyInTimezone(new Date(), timezone);
 
-  const todaySessions = sessions.filter(s => s.debut.startsWith(today));
+  const todaySessions = sessions.filter(s => dateKeyInTimezone(s.debut, timezone) === today);
   const todayTravail = todaySessions
     .filter(s => s.type_session === 'travail')
     .reduce((sum, s) => sum + (s.duree_minutes || (s.fin ? 0 : liveMinutes(s.debut))), 0);
@@ -191,14 +189,8 @@ export default function Pointage() {
     .reduce((sum, s) => sum + (s.duree_minutes || (s.fin ? 0 : liveMinutes(s.debut))), 0);
   const todayTotal = todayTravail + todayProspection;
 
-  const monday = (() => {
-    const d = new Date();
-    const day = d.getDay();
-    d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-    d.setHours(0, 0, 0, 0);
-    return d;
-  })();
-  const weekSessions = sessions.filter(s => new Date(s.debut) >= monday);
+  const monday = mondayKeyInTimezone(timezone);
+  const weekSessions = sessions.filter(s => dateKeyInTimezone(s.debut, timezone) >= monday);
   const weekTravail = weekSessions.filter(s => s.type_session === 'travail').reduce((sum, s) => sum + (s.duree_minutes || 0), 0);
   const weekProspection = weekSessions.filter(s => s.type_session === 'prospection').reduce((sum, s) => sum + (s.duree_minutes || 0), 0);
   const weekTotal = weekTravail + weekProspection;
@@ -217,7 +209,7 @@ export default function Pointage() {
     <div className="space-y-8 max-w-4xl mx-auto">
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Pointage</h1>
-        <p className="text-slate-500 mt-1">Suivi du temps de travail et de la prospection commerciale</p>
+        <p className="text-slate-500 mt-1">Suivi du temps de travail et de la prospection commerciale · {timezone}</p>
       </div>
 
       {/* Type selector + Timer card */}
@@ -287,7 +279,7 @@ export default function Pointage() {
 
         {activeSession && (
           <p className={`text-sm mb-6 ${isProspection ? 'text-emerald-500' : 'text-blue-500'}`}>
-            Démarrée à {fmtTime(activeSession.debut)}
+            Démarrée à {fmtTime(activeSession.debut, timezone)}
           </p>
         )}
 
@@ -461,7 +453,7 @@ export default function Pointage() {
                     className="w-full px-6 py-3 bg-slate-50 hover:bg-slate-100 transition-colors flex items-center justify-between"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-sm font-semibold text-slate-700 capitalize">{fmtDate(date + 'T12:00:00')}</span>
+                      <span className="text-sm font-semibold text-slate-700 capitalize">{fmtDate(date + 'T12:00:00Z', timezone)}</span>
                       {isExpanded
                         ? <ChevronUp className="w-4 h-4 text-slate-400" />
                         : <ChevronDown className="w-4 h-4 text-slate-400" />
@@ -510,8 +502,8 @@ export default function Pointage() {
                             <span className={`text-sm font-semibold ${
                               isActive ? (isProsp ? 'text-emerald-700' : 'text-blue-700') : 'text-slate-900'
                             }`}>
-                              {fmtTime(session.debut)}
-                              {session.fin && <> → {fmtTime(session.fin)}</>}
+                              {fmtTime(session.debut, timezone)}
+                              {session.fin && <> → {fmtTime(session.fin, timezone)}</>}
                               {isActive && (
                                 <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${
                                   isProsp ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'

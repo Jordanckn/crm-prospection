@@ -3,13 +3,14 @@ import {
   Plus, Phone, Mail, MessageCircle, X, Clock,
   Facebook as FacebookIcon, Instagram as InstagramIcon,
   ChevronUp, ChevronDown, Settings2, Eye, EyeOff, Search, Trash2,
-  CreditCard, Send, FileText,
+  CreditCard, Send, FileText, UserRound,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Interaction, Contact, Template } from '../types/database';
+import type { Interaction, Contact, Profile, Template } from '../types/database';
 import ContactSearchSelect from '../components/ContactSearchSelect';
 import ContactSidePanel from '../components/ContactSidePanel';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { formatInTimezone, safeTimezone, toZonedDateTimeInput } from '../lib/timezone';
 
 const TYPES = ['Appel', 'Email', 'WhatsApp', 'SMS', 'Facebook', 'Instagram'] as const;
 const RESULTATS = ['Pas de réponse', 'Répondu', 'Intéressé', 'Non intéressé', 'Relance'] as const;
@@ -20,12 +21,13 @@ type SortDir = 'asc' | 'desc';
 type ColumnDef = { key: string; label: string; defaultVisible: boolean };
 const ALL_COLUMNS: ColumnDef[] = [
   { key: 'contact', label: 'Contact', defaultVisible: true },
+  { key: 'entreprise', label: 'Entreprise', defaultVisible: true },
   { key: 'type', label: 'Type', defaultVisible: true },
   { key: 'date', label: 'Date & Heure', defaultVisible: true },
   { key: 'duree', label: 'Durée', defaultVisible: true },
   { key: 'resultat', label: 'Résultat', defaultVisible: true },
   { key: 'notes', label: 'Notes', defaultVisible: true },
-  { key: 'entreprise', label: 'Entreprise', defaultVisible: false },
+  { key: 'auteur', label: 'Créée par / responsable', defaultVisible: true },
 ];
 
 const TYPE_COLORS: Record<string, string> = {
@@ -67,12 +69,16 @@ function SortTh({ col, label, sortKey, sortDir, onSort }: { col: SortKey; label:
 
 type Props = {
   onOpenContact?: (id: string) => void;
+  timezone?: string;
+  profileId?: string;
 };
 
-export default function Interactions({ onOpenContact }: Props) {
+export default function Interactions({ onOpenContact, timezone: requestedTimezone, profileId }: Props) {
+  const timezone = safeTimezone(requestedTimezone);
   const { canModify, canDelete } = usePermissions();
   const [interactions, setInteractions] = useState<(Interaction & { contacts?: Contact })[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [filterType, setFilterType] = useState('');
@@ -81,7 +87,14 @@ export default function Interactions({ onOpenContact }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('date_heure');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [visibleCols, setVisibleCols] = useState<Set<string>>(
-    new Set(ALL_COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
+    () => {
+      const defaults = ALL_COLUMNS.filter(c => c.defaultVisible).map(c => c.key);
+      try {
+        const saved = JSON.parse(localStorage.getItem(`crm-interaction-visible-columns:${profileId || 'default'}`) || '[]') as string[];
+        const valid = saved.filter(key => ALL_COLUMNS.some(column => column.key === key));
+        return new Set(valid.length ? valid : defaults);
+      } catch { return new Set(defaults); }
+    }
   );
   const [showColPanel, setShowColPanel] = useState(false);
   const colPanelRef = useRef<HTMLDivElement>(null);
@@ -95,13 +108,17 @@ export default function Interactions({ onOpenContact }: Props) {
   const [formData, setFormData] = useState({
     contact_id: '',
     type: 'Appel' as Interaction['type'],
-    date_heure: new Date().toISOString().slice(0, 16),
+    date_heure: toZonedDateTimeInput(new Date(), timezone),
     duree: 0,
     resultat: '' as Interaction['resultat'],
     notes: '',
   });
 
   useEffect(() => { loadData(); }, []);
+
+  useEffect(() => {
+    localStorage.setItem(`crm-interaction-visible-columns:${profileId || 'default'}`, JSON.stringify([...visibleCols]));
+  }, [visibleCols, profileId]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -113,14 +130,16 @@ export default function Interactions({ onOpenContact }: Props) {
 
   const loadData = async () => {
     try {
-      const [iRes, cRes, tRes] = await Promise.all([
+      const [iRes, cRes, tRes, pRes] = await Promise.all([
         supabase.from('interactions').select('*, contacts(*)').order('date_heure', { ascending: false }),
         supabase.from('contacts').select('*').order('nom', { ascending: true }),
         supabase.from('templates').select('*').eq('type', 'Email').order('titre'),
+        supabase.from('profiles').select('*').order('full_name'),
       ]);
       setInteractions(iRes.data || []);
       setContacts(cRes.data || []);
       setEmailTemplates(tRes.data || []);
+      setProfiles(pRes.data || []);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
@@ -147,6 +166,7 @@ export default function Interactions({ onOpenContact }: Props) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          contact_id: contact.id,
           to: contact.email,
           subject: template.objet || template.titre,
           html: isHtml ? html : `<div style="font-family:sans-serif;white-space:pre-wrap;">${html}</div>`,
@@ -155,16 +175,8 @@ export default function Interactions({ onOpenContact }: Props) {
 
       const data = await res.json();
       if (res.ok && data.success) {
-        await supabase.from('interactions').insert([{
-          contact_id: contact.id,
-          type: 'Email',
-          date_heure: new Date().toISOString(),
-          duree: 0,
-          resultat: '',
-          notes: `Email envoye: ${template.titre}`,
-        }]);
-        await supabase.from('contacts').update({ derniere_interaction: new Date().toISOString() }).eq('id', contact.id);
-        setEmailSentFeedback({ id: contact.id, success: true, msg: 'Envoye !' });
+        const senderName = data.sender?.name || data.sender?.from_email || data.provider;
+        setEmailSentFeedback({ id: contact.id, success: true, msg: `Envoyé via ${senderName}` });
         loadData();
       } else {
         setEmailSentFeedback({ id: contact.id, success: false, msg: data.error || 'Erreur' });
@@ -179,7 +191,7 @@ export default function Interactions({ onOpenContact }: Props) {
   };
 
   const resetForm = () => {
-    setFormData({ contact_id: '', type: 'Appel', date_heure: new Date().toISOString().slice(0, 16), duree: 0, resultat: '', notes: '' });
+    setFormData({ contact_id: '', type: 'Appel', date_heure: toZonedDateTimeInput(new Date(), timezone), duree: 0, resultat: '', notes: '' });
     setEditingId(null);
   };
 
@@ -188,7 +200,7 @@ export default function Interactions({ onOpenContact }: Props) {
     setFormData({
       contact_id: interaction.contact_id,
       type: interaction.type,
-      date_heure: new Date(interaction.date_heure).toISOString().slice(0, 16),
+      date_heure: toZonedDateTimeInput(interaction.date_heure, timezone),
       duree: interaction.duree || 0,
       resultat: interaction.resultat || '',
       notes: interaction.notes || '',
@@ -199,11 +211,17 @@ export default function Interactions({ onOpenContact }: Props) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      if (editingId) {
-        await supabase.from('interactions').update(formData).eq('id', editingId);
-      } else {
-        await supabase.from('interactions').insert([formData]);
-      }
+      const { error } = await supabase.rpc('save_interaction_local_time', {
+        p_interaction_id: editingId,
+        p_contact_id: formData.contact_id,
+        p_type: formData.type,
+        p_local_datetime: formData.date_heure,
+        p_timezone: timezone,
+        p_duree: formData.duree,
+        p_resultat: formData.resultat,
+        p_notes: formData.notes,
+      });
+      if (error) throw error;
       setShowModal(false); resetForm(); loadData();
     } catch (err) { console.error(err); }
   };
@@ -235,7 +253,8 @@ export default function Interactions({ onOpenContact }: Props) {
       if (searchTerm) {
         const t = searchTerm.toLowerCase();
         const c = i.contacts;
-        if (!(`${c?.prenom} ${c?.nom}`.toLowerCase().includes(t) || (c?.entreprise || '').toLowerCase().includes(t) || (i.notes || '').toLowerCase().includes(t))) return false;
+        const author = profiles.find(profile => profile.id === i.user_id);
+        if (!(`${c?.prenom} ${c?.nom}`.toLowerCase().includes(t) || (c?.entreprise || '').toLowerCase().includes(t) || (i.notes || '').toLowerCase().includes(t) || (author?.full_name || author?.email || '').toLowerCase().includes(t))) return false;
       }
       return true;
     })
@@ -255,7 +274,7 @@ export default function Interactions({ onOpenContact }: Props) {
       return 0;
     });
 
-  const fmtDateTime = (d: string) => new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const fmtDateTime = (d: string) => formatInTimezone(d, timezone, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>;
 
@@ -350,12 +369,13 @@ export default function Interactions({ onOpenContact }: Props) {
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 {visibleCols.has('contact') && <SortTh col="contact" label="Contact" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />}
+                {visibleCols.has('entreprise') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Entreprise</th>}
                 {visibleCols.has('type') && <SortTh col="type" label="Type" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />}
                 {visibleCols.has('date') && <SortTh col="date_heure" label="Date & Heure" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />}
                 {visibleCols.has('duree') && <SortTh col="duree" label="Durée" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />}
                 {visibleCols.has('resultat') && <SortTh col="resultat" label="Résultat" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />}
                 {visibleCols.has('notes') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Notes</th>}
-                {visibleCols.has('entreprise') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Entreprise</th>}
+                {visibleCols.has('auteur') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Créée par</th>}
                 <th className="px-3 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Actions</th>
               </tr>
             </thead>
@@ -363,6 +383,8 @@ export default function Interactions({ onOpenContact }: Props) {
               {filtered.map(interaction => {
                 const Icon = getTypeIcon(interaction.type);
                 const contact = interaction.contacts;
+                const author = profiles.find(profile => profile.id === interaction.user_id);
+                const responsible = profiles.find(profile => profile.id === contact?.assigned_to);
                 return (
                   <tr key={interaction.id} className="hover:bg-slate-50 transition-colors group">
                     {visibleCols.has('contact') && (
@@ -380,6 +402,11 @@ export default function Interactions({ onOpenContact }: Props) {
                             </p>
                           </button>
                         ) : <span className="text-slate-400 text-xs">—</span>}
+                      </td>
+                    )}
+                    {visibleCols.has('entreprise') && (
+                      <td className="px-3 py-3 whitespace-nowrap text-xs font-semibold text-slate-700">
+                        {contact?.entreprise || <span className="font-normal text-slate-300">—</span>}
                       </td>
                     )}
                     {visibleCols.has('type') && (
@@ -419,9 +446,15 @@ export default function Interactions({ onOpenContact }: Props) {
                           : <span className="text-slate-300 text-xs">—</span>}
                       </td>
                     )}
-                    {visibleCols.has('entreprise') && (
+                    {visibleCols.has('auteur') && (
                       <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-600">
-                        {contact?.entreprise || <span className="text-slate-300">—</span>}
+                        <span className="flex items-center gap-1.5" title={author?.email || undefined}>
+                          <UserRound className="h-3.5 w-3.5 text-slate-400" />
+                          {author?.full_name || author?.email || 'Utilisateur inconnu'}
+                        </span>
+                        <span className="mt-0.5 block pl-5 text-[10px] text-slate-400" title={responsible?.email || undefined}>
+                          Responsable : {responsible?.full_name || responsible?.email || 'Non attribué'}
+                        </span>
                       </td>
                     )}
                     <td className="px-3 py-3 whitespace-nowrap">
@@ -528,7 +561,7 @@ export default function Interactions({ onOpenContact }: Props) {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Date et heure *</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Date et heure * <span className="normal-case font-normal text-slate-400">({timezone})</span></label>
                   <input type="datetime-local" required value={formData.date_heure} onChange={e => setFormData({ ...formData, date_heure: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                 </div>
                 {formData.type === 'Appel' && (

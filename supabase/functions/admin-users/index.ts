@@ -16,6 +16,16 @@ const normalizeRole = (value: unknown) => allowedRoles.has(String(value))
   ? String(value)
   : "contributor";
 
+const normalizeTimezone = (value: unknown, fallback = "Europe/Paris") => {
+  const timezone = String(value || fallback).trim();
+  try {
+    new Intl.DateTimeFormat("fr-FR", { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    return fallback;
+  }
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders });
 
@@ -58,7 +68,7 @@ Deno.serve(async (req: Request) => {
     const loadTarget = async () => {
       if (!targetId) return null;
       const { data } = await service.from("profiles")
-        .select("id, email, full_name, role, active, active_brand_id, profile_brands!inner(brand_id)")
+        .select("id, email, full_name, role, active, active_brand_id, timezone, profile_brands!inner(brand_id)")
         .eq("id", targetId)
         .eq("profile_brands.brand_id", caller.active_brand_id)
         .maybeSingle();
@@ -70,6 +80,7 @@ Deno.serve(async (req: Request) => {
       const password = String(body.password || "");
       const fullName = String(body.full_name || "").trim();
       const role = normalizeRole(body.role);
+      const timezone = normalizeTimezone(body.timezone);
       if (!email || password.length < 8 || !fullName) {
         return json({ error: "Nom, email et mot de passe de 8 caractères minimum requis." }, 400);
       }
@@ -78,7 +89,7 @@ Deno.serve(async (req: Request) => {
         email,
         password,
         email_confirm: true,
-        user_metadata: { full_name: fullName, role },
+        user_metadata: { full_name: fullName, role, timezone },
       });
       if (error) return json({ error: error.message }, 400);
 
@@ -87,6 +98,7 @@ Deno.serve(async (req: Request) => {
         full_name: fullName,
         role,
         active: true,
+        timezone,
         manager_id: user.id,
         active_brand_id: caller.active_brand_id,
       }).eq("id", data.user.id);
@@ -118,6 +130,9 @@ Deno.serve(async (req: Request) => {
       const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : undefined;
       const fullName = typeof body.full_name === "string" ? body.full_name.trim() : undefined;
       const password = typeof body.password === "string" ? body.password : undefined;
+      const timezone = typeof body.timezone === "string"
+        ? normalizeTimezone(body.timezone, target.timezone || "Europe/Paris")
+        : undefined;
       if (email !== undefined && !email) return json({ error: "L'email ne peut pas être vide." }, 400);
       if (fullName !== undefined && !fullName) return json({ error: "Le nom ne peut pas être vide." }, 400);
       if (password && password.length < 8) return json({ error: "Le nouveau mot de passe doit contenir au moins 8 caractères." }, 400);
@@ -128,10 +143,11 @@ Deno.serve(async (req: Request) => {
         authUpdates.email_confirm = true;
       }
       if (password) authUpdates.password = password;
-      if (fullName !== undefined || allowedRoles.has(String(body.role))) {
+      if (fullName !== undefined || allowedRoles.has(String(body.role)) || timezone !== undefined) {
         authUpdates.user_metadata = {
           full_name: fullName ?? target.full_name,
           role: allowedRoles.has(String(body.role)) ? body.role : target.role,
+          timezone: timezone ?? target.timezone ?? "Europe/Paris",
         };
       }
       if (Object.keys(authUpdates).length) {
@@ -144,6 +160,7 @@ Deno.serve(async (req: Request) => {
       if (email !== undefined) updates.email = email;
       if (allowedRoles.has(String(body.role))) updates.role = body.role;
       if (typeof body.active === "boolean") updates.active = body.active;
+      if (timezone !== undefined) updates.timezone = timezone;
       updates.updated_at = new Date().toISOString();
 
       const { data, error } = await service

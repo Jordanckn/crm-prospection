@@ -30,6 +30,8 @@ type Enrollment = {
   statut: 'active' | 'completed' | 'cancelled';
   prochaine_execution: string | null;
   derniere_execution: string | null;
+  execution_status?: 'pending' | 'processing' | 'sent' | 'error' | 'completed' | 'cancelled';
+  last_error?: string | null;
   contacts?: Contact;
 };
 
@@ -46,6 +48,7 @@ export default function EmailSequences() {
   const [editingSeq, setEditingSeq] = useState<EmailSequence | null>(null);
   const [showEnrollModal, setShowEnrollModal] = useState<EmailSequence | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const [operationMessage, setOperationMessage] = useState('');
   const [selectedSeq, setSelectedSeq] = useState<EmailSequence | null>(null);
 
   // Enrollment selection state
@@ -127,14 +130,21 @@ export default function EmailSequences() {
     e.preventDefault();
     const validSteps = form.etapes.filter(s => s.template_id);
     if (validSteps.length === 0) return;
+    if (validSteps.some((step, index) => index > 0 && step.delay_days <= validSteps[index - 1].delay_days)) {
+      setOperationMessage('Les délais doivent être strictement croissants : J+0, J+2, J+5, etc.');
+      return;
+    }
     try {
       const payload = { ...form, etapes: validSteps };
+      let error;
       if (editingSeq) {
-        await supabase.from('email_sequences').update(payload).eq('id', editingSeq.id);
+        ({ error } = await supabase.from('email_sequences').update(payload).eq('id', editingSeq.id));
       } else {
-        await supabase.from('email_sequences').insert([payload]);
+        ({ error } = await supabase.from('email_sequences').insert([payload]));
       }
+      if (error) throw error;
       setShowModal(false);
+      setOperationMessage('Séquence enregistrée.');
       resetForm();
       loadData();
     } catch (err) { console.error(err); }
@@ -213,21 +223,32 @@ export default function EmailSequences() {
     try {
       const etapes = showEnrollModal.etapes;
       const firstDelay = etapes.length > 0 ? etapes[0].delay_days : 0;
-      const prochaine = new Date(Date.now() + firstDelay * 24 * 60 * 60 * 1000).toISOString();
+      const enrolledAt = new Date();
+      const rows = Array.from(selectedContactIds).map((cid, index) => {
+        const variation = 1 + ((Math.random() * 2 - 1) * (showEnrollModal.alea_pourcentage || 0) / 100);
+        const staggerMs = index * (showEnrollModal.delai_base_minutes || 3) * variation * 60 * 1000;
+        const contactStart = new Date(enrolledAt.getTime() + staggerMs);
+        return {
+          sequence_id: showEnrollModal.id,
+          contact_id: cid,
+          etape_courante: 0,
+          statut: 'active',
+          execution_status: 'pending',
+          enrolled_at: contactStart.toISOString(),
+          prochaine_execution: new Date(contactStart.getTime() + firstDelay * 24 * 60 * 60 * 1000).toISOString(),
+        };
+      });
 
-      const rows = Array.from(selectedContactIds).map(cid => ({
-        sequence_id: showEnrollModal.id,
-        contact_id: cid,
-        etape_courante: 0,
-        statut: 'active',
-        prochaine_execution: prochaine,
-      }));
-
-      await supabase.from('email_sequence_enrollments').insert(rows);
+      const { error } = await supabase.from('email_sequence_enrollments').insert(rows);
+      if (error) throw error;
       setShowEnrollModal(null);
       setSelectedContactIds(new Set());
+      setOperationMessage(`${rows.length} prospect(s) inscrit(s). Le moteur serveur prendra le relais automatiquement.`);
       loadData();
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      console.error(err);
+      setOperationMessage(`Erreur d’inscription : ${err instanceof Error ? err.message : 'opération impossible'}`);
+    }
     finally { setEnrolling(false); }
   };
 
@@ -259,6 +280,8 @@ export default function EmailSequences() {
           <Plus className="w-4 h-4" /> Nouvelle sequence
         </button>
       </div>
+
+      {operationMessage && <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{operationMessage}</div>}
 
       {/* Sequences grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -363,8 +386,8 @@ export default function EmailSequences() {
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-slate-900 truncate">{c?.prenom} {c?.nom}</p>
                             <div className="flex items-center gap-2">
-                              <span className={`text-[10px] font-semibold ${enr.statut === 'active' ? 'text-blue-600' : enr.statut === 'completed' ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                {enr.statut === 'active' ? `Etape ${enr.etape_courante + 1}/${selectedSeq.etapes.length}` : enr.statut === 'completed' ? 'Termine' : 'Annule'}
+                              <span className={`text-[10px] font-semibold ${enr.execution_status === 'error' ? 'text-red-600' : enr.statut === 'active' ? 'text-blue-600' : enr.statut === 'completed' ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {enr.execution_status === 'error' ? 'Erreur' : enr.execution_status === 'processing' ? 'En cours' : enr.execution_status === 'sent' ? 'Envoyé' : enr.statut === 'active' ? `Etape ${enr.etape_courante + 1}/${selectedSeq.etapes.length}` : enr.statut === 'completed' ? 'Terminé' : 'Annulé'}
                               </span>
                               {enr.prochaine_execution && enr.statut === 'active' && (
                                 <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
@@ -373,6 +396,7 @@ export default function EmailSequences() {
                                 </span>
                               )}
                             </div>
+                            {enr.last_error && <p className="mt-1 max-w-xs truncate text-[10px] text-red-600" title={enr.last_error}>{enr.last_error}</p>}
                           </div>
                         </div>
                         {enr.statut === 'active' && (

@@ -4,7 +4,7 @@ import {
   Clock, MapPin, Briefcase, Instagram, Facebook, Linkedin, Twitter,
   ChevronLeft, ChevronRight, List, Map, ChevronUp, ChevronDown as ChevronDownIcon,
   Settings2, Eye, EyeOff, Globe, FileText, Hash, Smartphone, Monitor, RefreshCw,
-  Upload, PanelRight, PhoneCall, UserRound,
+  Upload, PanelRight, PhoneCall, UserRound, GripVertical,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Contact } from '../types/database';
@@ -49,7 +49,7 @@ function findSecteurGroupe(secteur: string): string {
 
 const PAGE_SIZE = 15;
 
-type SortKey = 'nom' | 'prenom' | 'entreprise' | 'statut' | 'pays' | 'secteur_activite' | 'derniere_interaction' | 'created_at';
+type SortKey = 'nom' | 'prenom' | 'entreprise' | 'statut' | 'interet' | 'pays' | 'secteur_activite' | 'derniere_interaction' | 'created_at';
 type SortDir = 'asc' | 'desc';
 
 type ColumnDef = {
@@ -61,6 +61,7 @@ type ColumnDef = {
 const ALL_COLUMNS: ColumnDef[] = [
   { key: 'contact', label: 'Entreprise', defaultVisible: true },
   { key: 'statut', label: 'Statut', defaultVisible: true },
+  { key: 'interet', label: 'Intérêt', defaultVisible: true },
   { key: 'pays', label: 'Pays', defaultVisible: true },
   { key: 'entreprise', label: 'Nom du contact', defaultVisible: true },
   { key: 'secteur', label: 'Secteur', defaultVisible: true },
@@ -81,6 +82,7 @@ const emptyForm = {
   adresse: '', ville: '', code_postal: '',
   tags: [] as string[],
   statut: 'Nouveau' as Contact['statut'],
+  interet: '' as Contact['interet'],
   pays: 'France' as Contact['pays'],
   secteur_activite: '', instagram: '', facebook: '', linkedin: '', twitter: '',
   siren_siret: '', notes_entreprise: '', site_web: '',
@@ -110,15 +112,17 @@ type ContactsProps = {
   onOpenContact?: (id: string) => void;
   editTarget?: Contact | null;
   onEditTargetHandled?: () => void;
+  profileId?: string;
 };
 
-export default function Contacts({ onOpenContact, editTarget, onEditTargetHandled }: ContactsProps = {}) {
+export default function Contacts({ onOpenContact, editTarget, onEditTargetHandled, profileId }: ContactsProps = {}) {
   const { canModify, canDelete } = usePermissions();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatut, setFilterStatut] = useState('');
+  const [filterInteret, setFilterInteret] = useState('');
   const [filterTag, setFilterTag] = useState('');
   const [filterPays, setFilterPays] = useState('');
   const [filterSecteur, setFilterSecteur] = useState('');
@@ -135,14 +139,41 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [visibleCols, setVisibleCols] = useState<Set<string>>(
-    new Set(ALL_COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
+    () => {
+      const defaults = ALL_COLUMNS.filter(c => c.defaultVisible).map(c => c.key);
+      try {
+        const saved = JSON.parse(localStorage.getItem(`crm-contact-visible-columns:${profileId || 'default'}`) || '[]') as string[];
+        const valid = saved.filter(key => ALL_COLUMNS.some(column => column.key === key));
+        return new Set(valid.length ? valid : defaults);
+      } catch { return new Set(defaults); }
+    }
   );
+  const [columnOrder, setColumnOrder] = useState<string[]>(ALL_COLUMNS.map(column => column.key));
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
   const [showColPanel, setShowColPanel] = useState(false);
   const colPanelRef = useRef<HTMLDivElement>(null);
   const [formData, setFormData] = useState({ ...emptyForm });
   const [secteurGroupe, setSecteurGroupe] = useState(SECTEUR_GROUPS[0].label);
 
   useEffect(() => { loadContacts(); }, []);
+
+  useEffect(() => {
+    const storageKey = `crm-contact-column-order:${profileId || 'default'}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]') as string[];
+      const valid = saved.filter(key => ALL_COLUMNS.some(column => column.key === key));
+      const missing = ALL_COLUMNS.map(column => column.key).filter(key => !valid.includes(key));
+      if (valid.length) setColumnOrder([...valid, ...missing]);
+    } catch { /* Preference invalide: ordre par defaut. */ }
+  }, [profileId]);
+
+  useEffect(() => {
+    localStorage.setItem(`crm-contact-column-order:${profileId || 'default'}`, JSON.stringify(columnOrder));
+  }, [columnOrder, profileId]);
+
+  useEffect(() => {
+    localStorage.setItem(`crm-contact-visible-columns:${profileId || 'default'}`, JSON.stringify([...visibleCols]));
+  }, [visibleCols, profileId]);
 
   useEffect(() => {
     if (editTarget && canModify) {
@@ -171,6 +202,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
       );
     }
     if (filterStatut) filtered = filtered.filter(c => c.statut === filterStatut);
+    if (filterInteret) filtered = filtered.filter(c => c.interet === filterInteret);
     if (filterTag) filtered = filtered.filter(c => c.tags.includes(filterTag));
     if (filterPays) filtered = filtered.filter(c => c.pays === filterPays);
     if (filterSecteur) filtered = filtered.filter(c => c.secteur_activite === filterSecteur);
@@ -188,6 +220,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
       else if (sortKey === 'prenom') { av = a.prenom; bv = b.prenom; }
       else if (sortKey === 'entreprise') { av = a.entreprise || ''; bv = b.entreprise || ''; }
       else if (sortKey === 'statut') { av = a.statut; bv = b.statut; }
+      else if (sortKey === 'interet') { av = a.interet || ''; bv = b.interet || ''; }
       else if (sortKey === 'pays') { av = a.pays; bv = b.pays; }
       else if (sortKey === 'secteur_activite') { av = a.secteur_activite || ''; bv = b.secteur_activite || ''; }
       else if (sortKey === 'derniere_interaction') { av = a.derniere_interaction || ''; bv = b.derniere_interaction || ''; }
@@ -199,7 +232,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
 
     setFilteredContacts(filtered);
     setCurrentPage(1);
-  }, [searchTerm, filterStatut, filterTag, filterPays, filterSecteur, filterContacted, filterMobile, filterDocument, contacts, contactsWithDocs, sortKey, sortDir]);
+  }, [searchTerm, filterStatut, filterInteret, filterTag, filterPays, filterSecteur, filterContacted, filterMobile, filterDocument, contacts, contactsWithDocs, sortKey, sortDir]);
 
   const isMobileNumber = (tel: string) => {
     const clean = tel.replace(/[\s.\-()]/g, '');
@@ -233,6 +266,30 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
     });
   };
 
+  const moveColumn = (key: string, direction: -1 | 1) => {
+    setColumnOrder(previous => {
+      const index = previous.indexOf(key);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const dropColumnBefore = (targetKey: string) => {
+    if (!draggedColumn || draggedColumn === targetKey) return setDraggedColumn(null);
+    setColumnOrder(previous => {
+      const next = previous.filter(key => key !== draggedColumn);
+      const targetIndex = next.indexOf(targetKey);
+      next.splice(targetIndex < 0 ? next.length : targetIndex, 0, draggedColumn);
+      return next;
+    });
+    setDraggedColumn(null);
+  };
+
+  const resetColumnOrder = () => setColumnOrder(ALL_COLUMNS.map(column => column.key));
+
   const resetForm = () => { setFormData({ ...emptyForm }); setEditingContact(null); setSecteurGroupe(SECTEUR_GROUPS[0].label); };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -258,6 +315,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
       prenom: c.prenom, nom: c.nom, email: c.email, telephone: c.telephone,
       entreprise: c.entreprise, adresse: c.adresse || '', ville: c.ville || '',
       code_postal: c.code_postal || '', tags: c.tags, statut: c.statut, pays: c.pays,
+      interet: c.interet || '',
       secteur_activite: c.secteur_activite, instagram: c.instagram, facebook: c.facebook,
       linkedin: c.linkedin, twitter: c.twitter,
       siren_siret: c.siren_siret || '', notes_entreprise: c.notes_entreprise || '',
@@ -326,23 +384,76 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
     'Perdu': 'bg-red-50 text-red-700 border-red-200',
   }[s] || 'bg-slate-100 text-slate-700');
 
+  const getInteretColor = (value: Contact['interet']) => ({
+    '': 'bg-slate-50 text-slate-500 border-slate-200',
+    'Intéressé': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    'Non intéressé': 'bg-red-50 text-red-700 border-red-200',
+  }[value]);
+
   const getPaysFlag = (p: string) => ({ 'France': '🇫🇷', 'Israël': '🇮🇱' }[p] || '');
   const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString('fr-FR') : '—';
 
   const totalPages = Math.max(1, Math.ceil(filteredContacts.length / PAGE_SIZE));
   const paginated = filteredContacts.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const hasFilters = searchTerm || filterStatut || filterTag || filterPays || filterSecteur || filterContacted !== 'all' || filterMobile || filterDocument !== 'all';
+  const hasFilters = searchTerm || filterStatut || filterInteret || filterTag || filterPays || filterSecteur || filterContacted !== 'all' || filterMobile || filterDocument !== 'all';
   const todayStr = new Date().toISOString().split('T')[0];
   const contactedTodayIds = new Set(contacts.filter(c => c.derniere_interaction?.startsWith(todayStr)).map(c => c.id));
 
-  const SortTh = ({ col, label }: { col: SortKey; label: string }) => (
+  const SortTh = ({ col, label, columnKey }: { col: SortKey; label: string; columnKey: string }) => (
     <th
-      className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider cursor-pointer hover:bg-slate-100 select-none whitespace-nowrap"
+      draggable
+      onDragStart={() => setDraggedColumn(columnKey)}
+      onDragEnd={() => setDraggedColumn(null)}
+      onDragOver={event => event.preventDefault()}
+      onDrop={() => dropColumnBefore(columnKey)}
+      className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider cursor-grab active:cursor-grabbing hover:bg-slate-100 select-none whitespace-nowrap"
       onClick={() => handleSort(col)}
     >
       {label}<SortIcon col={col} sortKey={sortKey} sortDir={sortDir} />
     </th>
   );
+
+  const renderColumnHeader = (key: string) => {
+    if (!visibleCols.has(key)) return null;
+    switch (key) {
+      case 'contact': return <SortTh key={key} columnKey={key} col="entreprise" label="Entreprise" />;
+      case 'statut': return <SortTh key={key} columnKey={key} col="statut" label="Statut" />;
+      case 'interet': return <SortTh key={key} columnKey={key} col="interet" label="Intérêt" />;
+      case 'pays': return <SortTh key={key} columnKey={key} col="pays" label="Pays" />;
+      case 'entreprise': return <SortTh key={key} columnKey={key} col="nom" label="Nom du contact" />;
+      case 'secteur': return <SortTh key={key} columnKey={key} col="secteur_activite" label="Secteur" />;
+      case 'derniere_interaction': return <SortTh key={key} columnKey={key} col="derniere_interaction" label="Dernière interaction" />;
+      case 'created_at': return <SortTh key={key} columnKey={key} col="created_at" label="Ajouté le" />;
+      default: {
+        const label = ALL_COLUMNS.find(column => column.key === key)?.label || key;
+        return <th key={key} draggable onDragStart={() => setDraggedColumn(key)} onDragEnd={() => setDraggedColumn(null)} onDragOver={event => event.preventDefault()} onDrop={() => dropColumnBefore(key)}
+          className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap cursor-grab active:cursor-grabbing hover:bg-slate-100">{label}</th>;
+      }
+    }
+  };
+
+  const renderContactCell = (c: Contact, key: string) => {
+    if (!visibleCols.has(key)) return null;
+    switch (key) {
+      case 'contact': return <td key={key} className="px-3 py-3 whitespace-nowrap"><div className="flex items-center gap-2.5"><div className="relative flex-shrink-0"><div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold">{getCompanyInitials(c.entreprise || getPersonName(c))}</div>{contactedTodayIds.has(c.id) && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" title="Contacté aujourd'hui" />}</div><p className="font-semibold text-slate-900">{c.entreprise || getPersonName(c) || 'Entreprise non renseignée'}</p></div></td>;
+      case 'statut': return <td key={key} className="px-3 py-3 whitespace-nowrap"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${getStatutColor(c.statut)}`}>{c.statut}</span></td>;
+      case 'interet': return <td key={key} className="px-3 py-3 whitespace-nowrap"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${getInteretColor(c.interet)}`}>{c.interet || 'À qualifier'}</span></td>;
+      case 'pays': return <td key={key} className="px-3 py-3 whitespace-nowrap text-sm text-slate-600">{getPaysFlag(c.pays)} {c.pays}</td>;
+      case 'entreprise': return <td key={key} className="px-3 py-3 whitespace-nowrap">{getPersonName(c) && normalizeName(getPersonName(c)) !== normalizeName(c.entreprise || '') ? <div className="flex items-center gap-1.5 text-sm text-slate-700"><UserRound className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" /><span className="truncate max-w-32">{getPersonName(c)}</span></div> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'secteur': return <td key={key} className="px-3 py-3 whitespace-nowrap">{c.secteur_activite ? <div className="flex items-center gap-1.5 text-sm text-slate-600"><Briefcase className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" /><span className="truncate max-w-36">{c.secteur_activite}</span></div> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'coordonnees': return <td key={key} className="px-3 py-3"><div className="space-y-0.5">{c.email && <div className="flex items-center gap-1 text-xs text-slate-600"><Mail className="w-3 h-3 text-slate-400" /><span className="truncate max-w-36">{c.email}</span></div>}{c.telephone && <div className="flex items-center gap-1 text-xs text-slate-600"><Phone className="w-3 h-3 text-slate-400" />{c.telephone}</div>}</div></td>;
+      case 'reseaux': return <td key={key} className="px-3 py-3 whitespace-nowrap"><div className="flex items-center gap-1.5">{c.instagram && <a href={`https://instagram.com/${c.instagram}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:text-pink-700"><Instagram className="w-3.5 h-3.5" /></a>}{c.facebook && <a href={`https://facebook.com/${c.facebook}`} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800"><Facebook className="w-3.5 h-3.5" /></a>}{c.linkedin && <a href={`https://linkedin.com/in/${c.linkedin}`} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:text-blue-900"><Linkedin className="w-3.5 h-3.5" /></a>}{c.twitter && <a href={`https://twitter.com/${c.twitter}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-700"><Twitter className="w-3.5 h-3.5" /></a>}{!c.instagram && !c.facebook && !c.linkedin && !c.twitter && <span className="text-slate-300 text-xs">—</span>}</div></td>;
+      case 'adresse': return <td key={key} className="px-3 py-3">{(c.adresse || c.ville) ? <div className="flex items-start gap-1 text-xs text-slate-600"><MapPin className="w-3 h-3 text-slate-400 mt-0.5 flex-shrink-0" /><div>{c.adresse && <div className="truncate max-w-32">{c.adresse}</div>}{(c.code_postal || c.ville) && <div>{[c.code_postal, c.ville].filter(Boolean).join(' ')}</div>}</div></div> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'site_web': return <td key={key} className="px-3 py-3 whitespace-nowrap">{c.site_web ? <a href={c.site_web.startsWith('http') ? c.site_web : `https://${c.site_web}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 max-w-36 truncate"><Globe className="w-3 h-3 flex-shrink-0" /><span className="truncate">{c.site_web.replace(/^https?:\/\//, '')}</span></a> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'siren_siret': return <td key={key} className="px-3 py-3 whitespace-nowrap">{c.siren_siret ? <div className="flex items-center gap-1 text-xs text-slate-600"><Hash className="w-3 h-3 text-slate-400 flex-shrink-0" /><span className="font-mono">{c.siren_siret}</span></div> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'pagespeed': return <td key={key} className="px-3 py-3 whitespace-nowrap">{(c.pagespeed_mobile !== null || c.pagespeed_desktop !== null) ? <div className="flex items-center gap-2">{c.pagespeed_mobile !== null && <div className="flex items-center gap-1" title="Mobile"><Smartphone className="w-3 h-3 text-slate-400" /><PageSpeedBadge score={c.pagespeed_mobile} /></div>}{c.pagespeed_desktop !== null && <div className="flex items-center gap-1" title="Desktop"><Monitor className="w-3 h-3 text-slate-400" /><PageSpeedBadge score={c.pagespeed_desktop} /></div>}</div> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      case 'tags': return <td key={key} className="px-3 py-3 whitespace-nowrap"><div className="flex gap-1">{c.tags.slice(0, 2).map((tag, index) => <span key={index} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{tag}</span>)}{c.tags.length > 2 && <span className="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-xs">+{c.tags.length - 2}</span>}</div></td>;
+      case 'derniere_interaction': return <td key={key} className="px-3 py-3 whitespace-nowrap text-xs text-slate-500"><div className="flex items-center gap-1"><Clock className="w-3 h-3" />{fmtDate(c.derniere_interaction)}</div></td>;
+      case 'created_at': return <td key={key} className="px-3 py-3 whitespace-nowrap text-xs text-slate-500">{fmtDate(c.created_at)}</td>;
+      case 'documents': return <td key={key} className="px-3 py-3 whitespace-nowrap">{contactsWithDocs.has(c.id) ? <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold"><FileText className="w-3 h-3" /> Oui</span> : <span className="text-slate-300 text-xs">—</span>}</td>;
+      default: return null;
+    }
+  };
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>;
 
@@ -390,6 +501,11 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
           <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
             <option value="">Tous les statuts</option>
             {STATUTS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterInteret} onChange={e => setFilterInteret(e.target.value)} className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+            <option value="">Tous les niveaux d’intérêt</option>
+            <option value="Intéressé">Intéressé</option>
+            <option value="Non intéressé">Non intéressé</option>
           </select>
           <select value={filterSecteur} onChange={e => setFilterSecteur(e.target.value)} className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
             <option value="">Tous les secteurs</option>
@@ -446,7 +562,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
             </button>
           </div>
           {hasFilters && (
-            <button onClick={() => { setSearchTerm(''); setFilterStatut(''); setFilterTag(''); setFilterPays(''); setFilterSecteur(''); setFilterContacted('all'); setFilterMobile(false); setFilterDocument('all'); }} className="text-xs text-slate-500 hover:text-red-600 flex items-center gap-1 px-2 py-2">
+            <button onClick={() => { setSearchTerm(''); setFilterStatut(''); setFilterInteret(''); setFilterTag(''); setFilterPays(''); setFilterSecteur(''); setFilterContacted('all'); setFilterMobile(false); setFilterDocument('all'); }} className="text-xs text-slate-500 hover:text-red-600 flex items-center gap-1 px-2 py-2">
               <X className="w-3.5 h-3.5" />Réinitialiser
             </button>
           )}
@@ -475,22 +591,35 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
               <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">{visibleCols.size}</span>
             </button>
             {showColPanel && (
-              <div className="absolute right-0 top-full mt-2 w-52 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-slate-100">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Colonnes visibles</p>
+              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100">
+                  <div><p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Ordre des colonnes</p><p className="mt-0.5 text-[10px] text-slate-400">Glissez ou utilisez les flèches</p></div>
+                  <button onClick={resetColumnOrder} className="text-[10px] font-semibold text-blue-600 hover:text-blue-800">Réinitialiser</button>
                 </div>
-                {ALL_COLUMNS.map(col => (
-                  <button
-                    key={col.key}
-                    onClick={() => toggleCol(col.key)}
-                    className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    <span>{col.label}</span>
-                    {visibleCols.has(col.key)
-                      ? <Eye className="w-4 h-4 text-blue-600" />
-                      : <EyeOff className="w-4 h-4 text-slate-300" />}
-                  </button>
-                ))}
+                <div className="max-h-[430px] overflow-y-auto p-1.5">
+                  {columnOrder.map((key, index) => {
+                    const col = ALL_COLUMNS.find(column => column.key === key)!;
+                    return (
+                      <div key={col.key} draggable
+                        onDragStart={() => setDraggedColumn(col.key)}
+                        onDragEnd={() => setDraggedColumn(null)}
+                        onDragOver={event => event.preventDefault()}
+                        onDrop={() => dropColumnBefore(col.key)}
+                        className={`flex items-center gap-1 rounded-lg px-1.5 py-1.5 text-sm transition-colors ${draggedColumn === col.key ? 'bg-blue-50 opacity-60' : 'hover:bg-slate-50'}`}>
+                        <GripVertical className="h-4 w-4 flex-shrink-0 cursor-grab text-slate-300 active:cursor-grabbing" />
+                        <span className={`min-w-0 flex-1 truncate ${visibleCols.has(col.key) ? 'text-slate-700' : 'text-slate-400'}`}>{col.label}</span>
+                        <button onClick={() => moveColumn(col.key, -1)} disabled={index === 0} title="Monter"
+                          className="rounded p-1 text-slate-400 hover:bg-white hover:text-blue-600 disabled:opacity-20"><ChevronUp className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => moveColumn(col.key, 1)} disabled={index === columnOrder.length - 1} title="Descendre"
+                          className="rounded p-1 text-slate-400 hover:bg-white hover:text-blue-600 disabled:opacity-20"><ChevronDownIcon className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => toggleCol(col.key)} title={visibleCols.has(col.key) ? 'Masquer' : 'Afficher'}
+                          className="rounded p-1 hover:bg-white">
+                          {visibleCols.has(col.key) ? <Eye className="h-4 w-4 text-blue-600" /> : <EyeOff className="h-4 w-4 text-slate-300" />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -504,27 +633,15 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {visibleCols.has('contact') && <SortTh col="entreprise" label="Entreprise" />}
-                    {visibleCols.has('statut') && <SortTh col="statut" label="Statut" />}
-                    {visibleCols.has('pays') && <SortTh col="pays" label="Pays" />}
-                    {visibleCols.has('entreprise') && <SortTh col="nom" label="Nom du contact" />}
-                    {visibleCols.has('secteur') && <SortTh col="secteur_activite" label="Secteur" />}
-                    {visibleCols.has('coordonnees') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Coordonnées</th>}
-                    {visibleCols.has('reseaux') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Réseaux</th>}
-                    {visibleCols.has('adresse') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Adresse</th>}
-                    {visibleCols.has('site_web') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Site web</th>}
-                    {visibleCols.has('siren_siret') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">SIREN/SIRET</th>}
-                    {visibleCols.has('pagespeed') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">PageSpeed</th>}
-                    {visibleCols.has('tags') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Tags</th>}
-                    {visibleCols.has('derniere_interaction') && <SortTh col="derniere_interaction" label="Dernière interaction" />}
-                    {visibleCols.has('created_at') && <SortTh col="created_at" label="Ajouté le" />}
-                    {visibleCols.has('documents') && <th className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Documents</th>}
+                    {columnOrder.map(renderColumnHeader)}
                     <th className="px-3 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {paginated.map(c => (
                     <tr key={c.id} onClick={() => setSidePanelContact(c)} className="hover:bg-slate-50 transition-colors group cursor-pointer">
+                      {columnOrder.map(key => renderContactCell(c, key))}
+                      {false && <>
                       {visibleCols.has('contact') && (
                         <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-2.5">
@@ -632,13 +749,13 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                               {c.pagespeed_mobile !== null && (
                                 <div className="flex items-center gap-1" title="Mobile">
                                   <Smartphone className="w-3 h-3 text-slate-400" />
-                                  <PageSpeedBadge score={c.pagespeed_mobile} />
+                                  <PageSpeedBadge score={c.pagespeed_mobile ?? 0} />
                                 </div>
                               )}
                               {c.pagespeed_desktop !== null && (
                                 <div className="flex items-center gap-1" title="Desktop">
                                   <Monitor className="w-3 h-3 text-slate-400" />
-                                  <PageSpeedBadge score={c.pagespeed_desktop} />
+                                  <PageSpeedBadge score={c.pagespeed_desktop ?? 0} />
                                 </div>
                               )}
                             </div>
@@ -677,6 +794,7 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                           )}
                         </td>
                       )}
+                      </>}
                       <td className="px-3 py-3 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {onOpenContact && (
@@ -967,6 +1085,14 @@ export default function Contacts({ onOpenContact, editTarget, onEditTargetHandle
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Statut</label>
                   <select value={formData.statut} onChange={e => setFormData({ ...formData, statut: e.target.value as Contact['statut'] })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                     {STATUTS.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Intérêt</label>
+                  <select value={formData.interet} onChange={e => setFormData({ ...formData, interet: e.target.value as Contact['interet'] })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                    <option value="">À qualifier</option>
+                    <option value="Intéressé">Intéressé</option>
+                    <option value="Non intéressé">Non intéressé</option>
                   </select>
                 </div>
               </div>

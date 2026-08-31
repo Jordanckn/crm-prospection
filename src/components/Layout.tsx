@@ -3,6 +3,7 @@ import Sidebar from './Sidebar';
 import NotificationBell from './NotificationBell';
 import type { Profile } from '../types/database';
 import { roleLabel } from '../contexts/PermissionsContext';
+import { formatInTimezone } from '../lib/timezone';
 
 type LayoutProps = {
   currentPage: string;
@@ -25,7 +26,7 @@ const PAGE_TITLES: Record<string, string> = {
 };
 
 export default function Layout({ currentPage, onNavigate, children, profile }: LayoutProps) {
-  const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const today = formatInTimezone(new Date(), profile?.timezone, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const title = PAGE_TITLES[currentPage] || '';
 
   return (
