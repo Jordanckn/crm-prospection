@@ -97,7 +97,9 @@ export default function Templates() {
       setTemplates(templatesRes.data || []);
       setScripts(scriptsRes.data || []);
       setContacts(contactsRes.data || []);
-      setEmailSenders(sendersRes.data || []);
+      const availableSenders = sendersRes.data || [];
+      setEmailSenders(availableSenders);
+      setSendSenderCode(current => current || availableSenders.find(sender => sender.country === 'France')?.code || availableSenders[0]?.code || '');
     } catch (error) { console.error(error); }
     finally { setLoading(false); }
   };
@@ -182,7 +184,7 @@ export default function Templates() {
     setSendTo('');
     setSendContactId('');
     setSendAttachment(null);
-    setSendSenderCode(emailSenders.find(sender => sender.country === 'France')?.code || '');
+    setSendSenderCode(current => current || emailSenders.find(sender => sender.country === 'France')?.code || emailSenders[0]?.code || '');
     setSendResult(null);
     setShowSendModal(true);
   };
@@ -454,7 +456,22 @@ export default function Templates() {
                             <div className="px-5 py-3 border-b border-slate-100 bg-slate-50/50 space-y-1">
                               <div className="flex items-center gap-2 text-xs">
                                 <span className="font-semibold text-slate-500 w-10">De :</span>
-                                <span className="text-slate-700">contact@webfityou.com</span>
+                                {brand.code === 'epiderme_ai' ? (
+                                  <select
+                                    value={sendSenderCode}
+                                    onChange={event => setSendSenderCode(event.target.value)}
+                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                                    aria-label="Identité d’envoi utilisée pour la prévisualisation"
+                                  >
+                                    {emailSenders.map(sender => (
+                                      <option key={sender.code} value={sender.code}>
+                                        {sender.country === 'Israël' ? '🇮🇱 Epiderm AI' : '🇫🇷 Epiderme AI'} — {sender.from_email}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="text-slate-700">{brand.from_email}</span>
+                                )}
                               </div>
                               <div className="flex items-center gap-2 text-xs">
                                 <span className="font-semibold text-slate-500 w-10">A :</span>

@@ -3,6 +3,7 @@ import { Plus, X, Trash2, Play, Pause, Mail, Clock, Users, Check, ChevronRight, 
 import { supabase } from '../lib/supabase';
 import type { Template, Contact } from '../types/database';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useBrand } from '../contexts/BrandContext';
 
 type SequenceStep = {
   delay_days: number;
@@ -19,6 +20,7 @@ type EmailSequence = {
   delai_base_minutes: number;
   alea_pourcentage: number;
   rewrite_ia: boolean;
+  target_country: 'France' | 'Israël' | null;
   created_at: string;
 };
 
@@ -39,6 +41,7 @@ type EnrollMode = 'individual' | 'sector' | 'location';
 
 export default function EmailSequences() {
   const { canModify, canDelete } = usePermissions();
+  const { brand } = useBrand();
   const [sequences, setSequences] = useState<EmailSequence[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -66,6 +69,7 @@ export default function EmailSequences() {
     delai_base_minutes: 3,
     alea_pourcentage: 30,
     rewrite_ia: true,
+    target_country: 'France' as 'France' | 'Israël',
   });
 
   useEffect(() => { loadData(); }, []);
@@ -99,6 +103,9 @@ export default function EmailSequences() {
 
   const filteredEnrollContacts = useMemo(() => {
     let list = contacts.filter(c => c.email);
+    if (brand.code === 'epiderme_ai' && showEnrollModal?.target_country) {
+      list = list.filter(c => c.pays === showEnrollModal.target_country);
+    }
     if (enrollMode === 'sector' && enrollSector) {
       list = list.filter(c => c.secteur_activite === enrollSector);
     }
@@ -119,10 +126,10 @@ export default function EmailSequences() {
       list = list.filter(c => !enrolled.has(c.id));
     }
     return list;
-  }, [contacts, enrollMode, enrollSector, enrollLocation, enrollSearch, showEnrollModal, enrollments]);
+  }, [contacts, enrollMode, enrollSector, enrollLocation, enrollSearch, showEnrollModal, enrollments, brand.code]);
 
   const resetForm = () => {
-    setForm({ titre: '', description: '', etapes: [{ delay_days: 0, template_id: '', subject: '' }], actif: true, delai_base_minutes: 3, alea_pourcentage: 30, rewrite_ia: true });
+    setForm({ titre: '', description: '', etapes: [{ delay_days: 0, template_id: '', subject: '' }], actif: true, delai_base_minutes: 3, alea_pourcentage: 30, rewrite_ia: true, target_country: 'France' });
     setEditingSeq(null);
   };
 
@@ -135,7 +142,7 @@ export default function EmailSequences() {
       return;
     }
     try {
-      const payload = { ...form, etapes: validSteps };
+      const payload = { ...form, etapes: validSteps, target_country: brand.code === 'epiderme_ai' ? form.target_country : null };
       let error;
       if (editingSeq) {
         ({ error } = await supabase.from('email_sequences').update(payload).eq('id', editingSeq.id));
@@ -160,6 +167,7 @@ export default function EmailSequences() {
       delai_base_minutes: seq.delai_base_minutes || 3,
       alea_pourcentage: seq.alea_pourcentage || 30,
       rewrite_ia: seq.rewrite_ia !== false,
+      target_country: seq.target_country || 'France',
     });
     setShowModal(true);
   };
@@ -221,6 +229,14 @@ export default function EmailSequences() {
     if (!showEnrollModal || selectedContactIds.size === 0) return;
     setEnrolling(true);
     try {
+      if (brand.code === 'epiderme_ai' && showEnrollModal.target_country) {
+        const incompatible = Array.from(selectedContactIds)
+          .map(id => contacts.find(contact => contact.id === id))
+          .filter(contact => contact && contact.pays !== showEnrollModal.target_country);
+        if (incompatible.length) {
+          throw new Error(`Cette séquence est réservée à ${showEnrollModal.target_country}. Retirez les contacts d'un autre pays.`);
+        }
+      }
       const etapes = showEnrollModal.etapes;
       const firstDelay = etapes.length > 0 ? etapes[0].delay_days : 0;
       const enrolledAt = new Date();
@@ -309,6 +325,11 @@ export default function EmailSequences() {
                         <h3 className="font-semibold text-sm text-slate-900 truncate">{seq.titre}</h3>
                         {!seq.actif && <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded-full font-bold">PAUSE</span>}
                         {seq.rewrite_ia && <span title="Reecriture IA active"><Brain className="w-3 h-3 text-violet-500" /></span>}
+                        {brand.code === 'epiderme_ai' && (
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${seq.target_country === 'Israël' ? 'bg-sky-50 text-sky-700' : 'bg-blue-50 text-blue-700'}`}>
+                            {seq.target_country === 'Israël' ? '🇮🇱 Epiderm AI' : seq.target_country === 'France' ? '🇫🇷 Epiderme AI' : '🌍 Selon le contact'}
+                          </span>
+                        )}
                       </div>
                       {seq.description && <p className="text-xs text-slate-500 mt-0.5 truncate">{seq.description}</p>}
                       <div className="flex items-center gap-3 mt-2">
@@ -440,6 +461,27 @@ export default function EmailSequences() {
                 </div>
               </div>
 
+              {brand.code === 'epiderme_ai' && (
+                <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+                  <label htmlFor="sequence-target-country" className="mb-2 block text-xs font-bold uppercase tracking-wide text-violet-700">Choix de l’espace d’envoi *</label>
+                  <select
+                    id="sequence-target-country"
+                    required
+                    value={form.target_country}
+                    onChange={event => setForm({ ...form, target_country: event.target.value as 'France' | 'Israël' })}
+                    className="w-full rounded-xl border border-violet-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-violet-400"
+                  >
+                    <option value="France">🇫🇷 France — Epiderme AI</option>
+                    <option value="Israël">🇮🇱 Israël — Epiderm AI</option>
+                  </select>
+                  <div className="mt-2 rounded-lg border border-violet-100 bg-white/80 px-3 py-2 text-xs text-slate-600">
+                    Envoyé depuis <strong>{form.target_country === 'Israël' ? 'Epiderm AI' : 'Epiderme AI'}</strong>
+                    {' '}— {form.target_country === 'Israël' ? 'contact@epiderm-ai.com' : 'contact@epiderme-ai.com'}
+                  </div>
+                  <p className="mt-2 text-[11px] text-violet-700">Seuls les contacts du pays sélectionné pourront être inscrits à cette séquence.</p>
+                </div>
+              )}
+
               {/* Sending config */}
               <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
                 <p className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-3">Algorithme d'envoi humain</p>
@@ -569,6 +611,11 @@ export default function EmailSequences() {
               <div>
                 <h3 className="font-bold text-slate-900">Inscrire des contacts</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Sequence: {showEnrollModal.titre}</p>
+                {brand.code === 'epiderme_ai' && showEnrollModal.target_country && (
+                  <p className="mt-1 text-xs font-semibold text-violet-700">
+                    {showEnrollModal.target_country === 'Israël' ? '🇮🇱 Epiderm AI · contact@epiderm-ai.com' : '🇫🇷 Epiderme AI · contact@epiderme-ai.com'}
+                  </p>
+                )}
               </div>
               <button onClick={() => { setShowEnrollModal(null); setSelectedContactIds(new Set()); }} className="p-2 hover:bg-slate-100 rounded-xl"><X className="w-4 h-4" /></button>
             </div>

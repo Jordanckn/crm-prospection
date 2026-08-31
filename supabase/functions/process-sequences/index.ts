@@ -172,6 +172,9 @@ Deno.serve(async (req: Request) => {
     if (templateError) throw templateError;
     if (!template) throw new Error(`Template introuvable pour l'etape ${currentStep + 1}.`);
     if (!contact.email || contact.brand_id !== enrollment.brand_id) throw new Error("Prospect sans email valide ou rattache a une autre marque.");
+    if (brand.code === 'epiderme_ai' && sequence.target_country && contact.pays !== sequence.target_country) {
+      throw new Error(`Contact rattache a ${String(contact.pays || 'un pays non defini')}, mais cette sequence est reservee a ${String(sequence.target_country)}.`);
+    }
 
     let emailSender = {
       code: String(brand.code || ''),
